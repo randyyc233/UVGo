@@ -1,0 +1,341 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  DISPATCHER
+  DRIVER
+  PASSENGER
+}
+
+enum RouteCode {
+  GOA
+  LEGAZPI
+}
+
+enum DispatchProtocol {
+  GOSO
+  TAYA
+}
+
+enum GeofenceEventType {
+  ENTERED
+  EXITED
+}
+
+enum VehicleStatus {
+  OFFLINE
+  OUTSIDE_ZONE
+  INCOMING
+  AT_TERMINAL
+  WAITING
+  LOADING
+  READY_FOR_DISPATCH
+  ON_TRIP
+  DELAYED
+  UNAVAILABLE
+}
+
+enum QueueStatus {
+  WAITING
+  ASSIGNED
+  ACCEPTED
+  REJECTED
+  READY_FOR_DISPATCH
+  DEPARTED
+  DELAYED
+  REPLACED
+}
+
+enum TripStatus {
+  SCHEDULED
+  ASSIGNING
+  ASSIGNED
+  BOARDING
+  READY
+  DEPARTED
+  COMPLETED
+  DELAYED
+  UNABLE_TO_DEPART
+}
+
+enum AssignmentStatus {
+  PENDING
+  ACCEPTED
+  REJECTED
+  EXPIRED
+}
+
+enum ReservationStatus {
+  PENDING_PAYMENT
+  PENDING_VERIFICATION
+  CONFIRMED
+  RESCHEDULED
+  REALLOCATED
+  FORFEITED
+}
+
+enum PaymentMethod {
+  PAYPAL
+  GCASH_RECEIPT
+}
+
+enum PaymentStatus {
+  PENDING
+  PENDING_VERIFICATION
+  VERIFIED
+  CAPTURED
+  REJECTED
+  FAILED
+}
+
+enum NotificationType {
+  ASSIGNMENT
+  PAYMENT
+  BOOKING
+  REALLOCATION
+  QUEUE
+  TRIP
+  SYSTEM
+}
+
+enum DispatchAction {
+  GEOFENCE_ENTERED
+  GEOFENCE_EXITED
+  ASSIGNMENT_CREATED
+  ASSIGNMENT_ACCEPTED
+  ASSIGNMENT_REJECTED
+  QUEUE_OVERRIDDEN
+  MOVED_TO_LAST
+  VEHICLE_REPLACED
+  DRIVER_NOTIFIED
+  TRIP_STARTED
+  TRIP_DEPARTED
+  PAYMENT_APPROVED
+  PAYMENT_REJECTED
+  RESERVATION_REALLOCATED
+  DEMO_SIMULATION
+}
+
+model User {
+  id                 String           @id @default(cuid())
+  role               UserRole
+  name               String           @db.VarChar(120)
+  contact            String?          @db.VarChar(32)
+  email              String           @unique @db.VarChar(191)
+  passwordHash       String           @db.VarChar(191)
+  tokenVersion       Int              @default(0)
+  isActive           Boolean          @default(true)
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+  assignedVehicle    Vehicle?         @relation("VehicleDriver")
+  reservations       Reservation[]    @relation("PassengerReservations")
+  verifiedPayments   Payment[]        @relation("PaymentVerifier")
+  passengerCounts    PassengerCount[] @relation("PassengerCountSubmitter")
+  notifications      Notification[]
+  dispatchLogs       DispatchLog[]    @relation("DispatchActor")
+  tripAssignments    TripAssignment[] @relation("AssignmentDriver")
+
+  @@index([role, isActive])
+}
+
+model Vehicle {
+  id                    String            @id @default(cuid())
+  vanId                 String            @unique @db.VarChar(32)
+  plateNo               String            @unique @db.VarChar(32)
+  route                 RouteCode
+  protocol              DispatchProtocol
+  capacity              Int
+  status                VehicleStatus     @default(OUTSIDE_ZONE)
+  assignedDriverId      String?           @unique
+  lastKnownInsideZone   Boolean           @default(false)
+  locationTrackingActive Boolean          @default(false)
+  goOnTripEnabled       Boolean           @default(false)
+  latestArrivalAt       DateTime?
+  createdAt             DateTime          @default(now())
+  updatedAt             DateTime          @updatedAt
+  assignedDriver        User?             @relation("VehicleDriver", fields: [assignedDriverId], references: [id], onDelete: SetNull)
+  geofenceEvents        GeofenceEvent[]
+  queueEntries          QueueEntry[]
+  trips                 Trip[]
+  passengerCounts       PassengerCount[]
+
+  @@index([route, status])
+  @@index([lastKnownInsideZone, status])
+}
+
+model GeofenceEvent {
+  id          String             @id @default(cuid())
+  vehicleId   String
+  eventType   GeofenceEventType
+  timestamp   DateTime           @default(now())
+  latitude    Decimal?           @db.Decimal(10, 7)
+  longitude   Decimal?           @db.Decimal(10, 7)
+  distanceKm  Decimal?           @db.Decimal(7, 3)
+  vehicle     Vehicle            @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+
+  @@index([vehicleId, timestamp])
+  @@index([eventType, timestamp])
+}
+
+model QueueEntry {
+  id                String           @id @default(cuid())
+  vehicleId         String
+  route             RouteCode
+  position          Int
+  arrivalTimestamp  DateTime
+  status            QueueStatus      @default(WAITING)
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+  vehicle           Vehicle          @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  assignments       TripAssignment[]
+
+  @@index([route, status, position])
+  @@index([route, arrivalTimestamp])
+  @@index([vehicleId, status])
+}
+
+model Trip {
+  id                         String           @id @default(cuid())
+  vehicleId                  String
+  route                      RouteCode
+  scheduledOrTriggeredTime   DateTime
+  status                     TripStatus       @default(SCHEDULED)
+  fareAmount                 Decimal          @db.Decimal(10, 2)
+  departedAt                 DateTime?
+  completedAt                DateTime?
+  createdAt                  DateTime         @default(now())
+  updatedAt                  DateTime         @updatedAt
+  vehicle                    Vehicle          @relation(fields: [vehicleId], references: [id], onDelete: Restrict)
+  reservations               Reservation[]
+  reservedSeats              ReservationSeat[]
+  passengerCounts            PassengerCount[]
+  assignments                TripAssignment[]
+
+  @@index([route, scheduledOrTriggeredTime])
+  @@index([vehicleId, status])
+}
+
+model TripAssignment {
+  id                String           @id @default(cuid())
+  tripId            String
+  queueEntryId      String
+  driverId          String
+  status            AssignmentStatus @default(PENDING)
+  assignedAt        DateTime         @default(now())
+  responseDeadline  DateTime
+  respondedAt       DateTime?
+  trip              Trip             @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  queueEntry        QueueEntry       @relation(fields: [queueEntryId], references: [id], onDelete: Restrict)
+  driver            User             @relation("AssignmentDriver", fields: [driverId], references: [id], onDelete: Restrict)
+
+  @@unique([tripId, queueEntryId])
+  @@index([driverId, status])
+  @@index([status, responseDeadline])
+}
+
+model Reservation {
+  id                     String             @id @default(cuid())
+  reference              String             @unique @db.VarChar(32)
+  passengerId            String
+  tripId                 String
+  seatCount              Int
+  fareAmount             Decimal            @db.Decimal(10, 2)
+  status                 ReservationStatus  @default(PENDING_PAYMENT)
+  originalReservationId  String?
+  createdAt              DateTime           @default(now())
+  updatedAt              DateTime           @updatedAt
+  passenger              User               @relation("PassengerReservations", fields: [passengerId], references: [id], onDelete: Restrict)
+  trip                   Trip               @relation(fields: [tripId], references: [id], onDelete: Restrict)
+  originalReservation    Reservation?       @relation("ReservationLineage", fields: [originalReservationId], references: [id], onDelete: SetNull)
+  derivedReservations    Reservation[]      @relation("ReservationLineage")
+  seats                  ReservationSeat[]
+  payments               Payment[]
+
+  @@index([passengerId, createdAt])
+  @@index([tripId, status])
+  @@index([originalReservationId])
+}
+
+model ReservationSeat {
+  id             String       @id @default(cuid())
+  reservationId  String
+  tripId         String
+  seatNumber     Int
+  reservation    Reservation  @relation(fields: [reservationId], references: [id], onDelete: Cascade)
+  trip           Trip         @relation(fields: [tripId], references: [id], onDelete: Cascade)
+
+  @@unique([tripId, seatNumber])
+  @@index([reservationId])
+}
+
+model Payment {
+  id                 String         @id @default(cuid())
+  reservationId      String
+  method             PaymentMethod
+  paypalOrderId      String?        @unique @db.VarChar(191)
+  gcashReference     String?        @db.VarChar(100)
+  receiptImageKey    String?        @db.VarChar(191)
+  receiptMimeType    String?        @db.VarChar(64)
+  amount             Decimal        @db.Decimal(10, 2)
+  status             PaymentStatus  @default(PENDING)
+  paidAt             DateTime?
+  verifiedByUserId   String?
+  verifiedAt         DateTime?
+  rejectionReason    String?        @db.VarChar(500)
+  createdAt          DateTime       @default(now())
+  updatedAt          DateTime       @updatedAt
+  reservation        Reservation    @relation(fields: [reservationId], references: [id], onDelete: Cascade)
+  verifiedBy         User?          @relation("PaymentVerifier", fields: [verifiedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([method, status, createdAt])
+  @@index([reservationId])
+  @@index([verifiedByUserId])
+}
+
+model PassengerCount {
+  id                   String    @id @default(cuid())
+  vehicleId            String
+  tripId               String
+  count                Int
+  submittedByDriverId  String
+  timestamp            DateTime  @default(now())
+  vehicle              Vehicle   @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  trip                 Trip      @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  submittedBy          User      @relation("PassengerCountSubmitter", fields: [submittedByDriverId], references: [id], onDelete: Restrict)
+
+  @@index([tripId, timestamp])
+  @@index([vehicleId, timestamp])
+}
+
+model Notification {
+  id        String            @id @default(cuid())
+  userId    String
+  type      NotificationType
+  message   String            @db.VarChar(500)
+  isRead    Boolean           @default(false)
+  createdAt DateTime          @default(now())
+  user      User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, isRead, createdAt])
+}
+
+model DispatchLog {
+  id           String          @id @default(cuid())
+  actorUserId  String
+  action       DispatchAction
+  targetId     String          @db.VarChar(191)
+  reason       String?         @db.VarChar(500)
+  metadata     Json?
+  timestamp    DateTime        @default(now())
+  actor        User            @relation("DispatchActor", fields: [actorUserId], references: [id], onDelete: Restrict)
+
+  @@index([actorUserId, timestamp])
+  @@index([action, timestamp])
+  @@index([targetId])
+}
