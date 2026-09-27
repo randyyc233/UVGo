@@ -19,7 +19,6 @@ import { capturePayPalOrder, createPayPalOrder } from './paypalService.js';
 import {
   createAndAttachPaymongoQrph,
   createPaymongoPaymentIntent,
-  paymongoQrphAvailable,
   retrievePaymongoPaymentIntent,
   type PaymongoQrphCheckout,
   type PaymongoWebhookEvent,
@@ -154,7 +153,7 @@ export async function searchGoaTrips(date: string | undefined, passengers: numbe
         trip.vehicle.managedByDispatcher,
         routeDispatcher,
       ),
-      paymongoQrphAvailable: paymongoQrphAvailable(),
+      paymongoQrphAvailable: false,
     };
   });
 }
@@ -202,7 +201,7 @@ export async function getTripSeats(tripId: string) {
         trip.vehicle.managedByDispatcher,
         routeDispatcher,
       ),
-      paymongoQrphAvailable: paymongoQrphAvailable(),
+      paymongoQrphAvailable: false,
     },
     seats: Array.from({ length: capacity }, (_, index) => ({
       number: index + 1,

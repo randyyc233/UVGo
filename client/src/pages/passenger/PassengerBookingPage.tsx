@@ -7,7 +7,6 @@ import {
   CircleX,
   Clock3,
   MapPin,
-  QrCode,
   ShieldCheck,
   Smartphone,
   UploadCloud,
@@ -18,12 +17,11 @@ import { apiRequest, ApiError } from '../../api/http';
 import { useAuth } from '../../auth/authContext';
 import { BookingSummary } from '../../components/passenger/BookingSummary';
 import { PayPalHostedButton } from '../../components/passenger/PayPalHostedButton';
-import { PaymongoQrphPanel } from '../../components/passenger/PaymongoQrphPanel';
 import { VanSeatPicker } from '../../components/passenger/VanSeatPicker';
 import { Button, Card, Input, LoadingSkeleton, Stepper } from '../../components/ui';
 import { cn } from '../../lib/cn';
 import { formatTime12 } from '../../lib/dateTime';
-import type { GoaTrip, PassengerBooking, PaymongoQrphCheckout, TripSeat } from '../../types/passenger';
+import type { GoaTrip, PassengerBooking, TripSeat } from '../../types/passenger';
 
 const steps = [
   { id: 'search', label: 'Choose trip' },
@@ -86,12 +84,11 @@ export function PassengerBookingPage() {
   const [seats, setSeats] = useState<TripSeat[]>([]);
   const [selectedSeats, setSelectedSeats] = useState<number[]>([]);
   const [contact, setContact] = useState(user?.contact ?? '');
-  const [paymentMethod, setPaymentMethod] = useState<'paypal' | 'gcash' | 'paymongo_qrph'>('gcash');
+  const [paymentMethod, setPaymentMethod] = useState<'paypal' | 'gcash'>('gcash');
   const [gcashReference, setGcashReference] = useState('');
   const [receipt, setReceipt] = useState<File | null>(null);
   const [paypalReference, setPaypalReference] = useState('');
   const [booking, setBooking] = useState<PassengerBooking | null>(null);
-  const [paymongoCheckout, setPaymongoCheckout] = useState<PaymongoQrphCheckout | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -178,10 +175,6 @@ export function PassengerBookingPage() {
     }
     if (paymentMethod === 'gcash' && !receipt) {
       setError('Upload your GCash receipt before reviewing the booking.');
-      return;
-    }
-    if (paymentMethod === 'paymongo_qrph' && !trip?.paymongoQrphAvailable) {
-      setError('QR Ph is temporarily unavailable. Choose GCash receipt or PayPal instead.');
       return;
     }
     setStep(4);
@@ -293,34 +286,6 @@ export function PassengerBookingPage() {
     }
   }
 
-  async function startPaymongoQrphBooking() {
-    if (!trip || loading) return;
-    if (selectedSeats.length !== passengers) {
-      await returnToSeatSelection(`Choose exactly ${passengers} seat${passengers === 1 ? '' : 's'} before submitting.`);
-      return;
-    }
-    setLoading(true);
-    setError(null);
-    try {
-      const response = await apiRequest<{ booking: PassengerBooking; checkout: PaymongoQrphCheckout }>('/passenger/reservations/paymongo/qrph', {
-        method: 'POST',
-        body: JSON.stringify({ tripId: trip.id, seats: selectedSeats, contact }),
-      });
-      setBooking(response.booking);
-      setPaymongoCheckout(response.checkout);
-      setStep(5);
-    } catch (caughtError) {
-      setError(caughtError instanceof ApiError ? caughtError.message : 'The QR Ph payment could not be prepared.');
-      if (caughtError instanceof ApiError && caughtError.code === 'SEAT_UNAVAILABLE') {
-        await returnToSeatSelection('Those seats were just reserved by another passenger. Choose other available seats and try QR Ph again.');
-      } else if (caughtError instanceof ApiError && caughtError.code === 'TRIP_CLOSED') {
-        setError('This departure closed before the QR Ph payment was prepared. No reservation or payment was created.');
-      }
-    } finally {
-      setLoading(false);
-    }
-  }
-
   return (
     <div className="pb-10" id="booking-flow">
       <div className="mx-auto max-w-[76rem]">
@@ -384,18 +349,7 @@ export function PassengerBookingPage() {
                 </div>
                 <fieldset className="mt-7">
                   <legend className="text-sm font-bold">Payment method</legend>
-                  <div className="mt-3 grid gap-3 sm:grid-cols-3">
-                    <button
-                      type="button"
-                      aria-pressed={paymentMethod === 'paymongo_qrph'}
-                      disabled={!trip.paymongoQrphAvailable}
-                      onClick={() => { setPaymentMethod('paymongo_qrph'); setError(null); }}
-                      className={cn('rounded-card border p-4 text-left transition', paymentMethod === 'paymongo_qrph' ? 'border-primary bg-primary-soft ring-2 ring-primary/10' : 'border-border hover:border-primary/50', !trip.paymongoQrphAvailable && 'cursor-not-allowed opacity-50')}
-                    >
-                      <QrCode className="h-6 w-6 text-primary" aria-hidden="true" />
-                      <span className="mt-3 block font-extrabold">QR Ph</span>
-                      <span className="mt-1 block text-xs leading-5 text-text-secondary">Scan a secure, amount-specific PayMongo QR code.</span>
-                    </button>
+                  <div className="mt-3 grid gap-3 sm:grid-cols-2">
                     <button
                       type="button"
                       aria-pressed={paymentMethod === 'gcash'}
@@ -467,8 +421,8 @@ export function PassengerBookingPage() {
                   </div>
                   <div className="rounded-control bg-cream p-4">
                     <p className="text-xs font-semibold text-text-secondary">Payment method</p>
-                    <p className="mt-1 font-bold">{paymentMethod === 'paypal' ? 'PayPal — merchant Pay Now button' : paymentMethod === 'paymongo_qrph' ? 'QR Ph — PayMongo' : 'GCash — receipt upload'}</p>
-                    <p className="text-sm text-text-secondary">{paymentMethod === 'paymongo_qrph' ? 'Automatically confirmed after PayMongo verifies payment' : 'Dispatcher verification required before confirmation'}</p>
+                    <p className="mt-1 font-bold">{paymentMethod === 'paypal' ? 'PayPal — merchant Pay Now button' : 'GCash — receipt upload'}</p>
+                    <p className="text-sm text-text-secondary">Dispatcher verification required before confirmation</p>
                   </div>
                 </div>
                 {error ? <p role="alert" className="mt-4 rounded-control border border-danger/25 bg-danger-soft p-3 text-sm leading-6 text-danger">{error}</p> : null}
@@ -517,22 +471,6 @@ export function PassengerBookingPage() {
                     </form>
                   </section>
                 ) : null}
-                {paymentMethod === 'paymongo_qrph' ? (
-                  <section className="mt-6 border-t border-border pt-5" aria-labelledby="qrph-create-heading">
-                    <div className="flex items-start gap-3">
-                      <QrCode className="mt-0.5 h-6 w-6 shrink-0 text-primary" aria-hidden="true" />
-                      <div>
-                        <h2 id="qrph-create-heading" className="font-extrabold text-primary-dark">Generate your QR Ph payment</h2>
-                        <p className="mt-1 text-sm leading-6 text-text-secondary">UVGo will hold the selected seats and generate a single-use QR code for exactly <strong className="text-text-primary">₱{total.toFixed(2)}</strong>. The reservation is confirmed only after PayMongo verifies payment.</p>
-                      </div>
-                    </div>
-                    <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-between">
-                      <Button type="button" variant="ghost" onClick={() => { setError(null); setStep(3); }} leadingIcon={<ArrowLeft className="h-4 w-4" />}>Back to details</Button>
-                      <Button type="button" loading={loading} onClick={() => void startPaymongoQrphBooking()} leadingIcon={<QrCode className="h-4 w-4" />}>Generate QR and reserve seats</Button>
-                    </div>
-                  </section>
-                ) : null}
-
               </Card>
               <BookingSummary trip={trip} seats={selectedSeats} paymentMethod={paymentMethod} />
             </div>
@@ -543,10 +481,10 @@ export function PassengerBookingPage() {
               {loading ? <Card className="p-7"><LoadingSkeleton lines={5} /></Card> : null}
               {!loading && booking ? (
                 <Card className="overflow-hidden">
-                  <div className={cn('p-6 text-white sm:p-8', booking.status === 'confirmed' ? 'bg-primary' : ['rejected', 'failed'].includes(booking.payment?.status ?? '') ? 'bg-danger' : booking.payment?.method === 'paymongo_qrph' ? 'bg-info' : 'bg-warning')}>
-                    {booking.status === 'confirmed' ? <CheckCircle2 className="h-12 w-12" aria-hidden="true" /> : ['rejected', 'failed'].includes(booking.payment?.status ?? '') ? <CircleX className="h-12 w-12" aria-hidden="true" /> : booking.payment?.method === 'paymongo_qrph' ? <QrCode className="h-12 w-12" aria-hidden="true" /> : <Clock3 className="h-12 w-12" aria-hidden="true" />}
-                    <p className="mt-4 text-sm font-bold uppercase tracking-[0.12em] text-white/80">{booking.status === 'confirmed' ? 'Seat reserved' : ['rejected', 'failed'].includes(booking.payment?.status ?? '') ? 'Payment unsuccessful' : booking.payment?.method === 'paymongo_qrph' ? 'Secure payment' : 'Payment report received'}</p>
-                    <h1 className="mt-1 text-3xl font-black text-white">{booking.status === 'confirmed' ? 'Your Goa ride is confirmed!' : ['rejected', 'failed'].includes(booking.payment?.status ?? '') ? 'Your payment was not completed' : booking.payment?.method === 'paymongo_qrph' ? 'Scan the QR code to pay' : 'Payment verification pending'}</h1>
+                  <div className={cn('p-6 text-white sm:p-8', booking.status === 'confirmed' ? 'bg-primary' : ['rejected', 'failed'].includes(booking.payment?.status ?? '') ? 'bg-danger' : 'bg-warning')}>
+                    {booking.status === 'confirmed' ? <CheckCircle2 className="h-12 w-12" aria-hidden="true" /> : ['rejected', 'failed'].includes(booking.payment?.status ?? '') ? <CircleX className="h-12 w-12" aria-hidden="true" /> : <Clock3 className="h-12 w-12" aria-hidden="true" />}
+                    <p className="mt-4 text-sm font-bold uppercase tracking-[0.12em] text-white/80">{booking.status === 'confirmed' ? 'Seat reserved' : ['rejected', 'failed'].includes(booking.payment?.status ?? '') ? 'Payment unsuccessful' : 'Payment report received'}</p>
+                    <h1 className="mt-1 text-3xl font-black text-white">{booking.status === 'confirmed' ? 'Your Goa ride is confirmed!' : ['rejected', 'failed'].includes(booking.payment?.status ?? '') ? 'Your payment was not completed' : 'Payment verification pending'}</h1>
                   </div>
                   <div className="p-6 sm:p-8">
                     <div className="rounded-card border-2 border-primary/25 bg-success-soft p-4 sm:p-5">
@@ -557,7 +495,6 @@ export function PassengerBookingPage() {
                         Save or screenshot this reference. Bring a valid ID matching the passenger name and present both at the terminal for reservation verification.
                       </p>
                     </div>
-                    {booking.payment?.method === 'paymongo_qrph' ? <div className="mt-6"><PaymongoQrphPanel booking={booking} initialCheckout={paymongoCheckout} onBookingChange={setBooking} /></div> : null}
                     <div className="mt-6 grid gap-4 rounded-card bg-cream p-4 sm:grid-cols-2">
                       <div className="sm:col-span-2">
                         <p className="text-xs text-text-secondary">Travel date</p>

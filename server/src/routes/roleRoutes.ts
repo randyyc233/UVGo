@@ -6,7 +6,6 @@ import {
   booking,
   bookings,
   createGcash,
-  createPaymongoQrph,
   createPaypalHosted,
   changePassword,
   deleteNotification,
@@ -90,7 +89,6 @@ passengerRouter.get('/trips', asyncHandler(searchTrips));
 passengerRouter.get('/trips/:tripId/seats', asyncHandler(tripSeats));
 passengerRouter.post('/reservations/paypal/hosted', asyncHandler(createPaypalHosted));
 passengerRouter.post('/reservations/gcash', receiptUpload.single('receipt'), asyncHandler(createGcash));
-passengerRouter.post('/reservations/paymongo/qrph', asyncHandler(createPaymongoQrph));
 passengerRouter.get('/bookings', asyncHandler(bookings));
 passengerRouter.get('/bookings/:reference', asyncHandler(booking));
 passengerRouter.get('/bookings/:reference/paymongo/qrph', asyncHandler(paymongoQrphCheckout));

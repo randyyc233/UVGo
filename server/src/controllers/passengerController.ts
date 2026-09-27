@@ -5,7 +5,6 @@ import {
   gcashReservationSchema,
   passengerPasswordSchema,
   passengerProfileSchema,
-  paymongoQrphReservationSchema,
   paypalHostedReservationSchema,
   paypalReservationSchema,
   rescheduleSchema,
@@ -15,7 +14,6 @@ import {
   capturePaypalReservation,
   changePassengerPassword,
   createGcashReservation,
-  createPaymongoQrphReservation,
   createPaypalHostedReservation,
   createPaypalReservation,
   deletePassengerNotification,
@@ -96,12 +94,6 @@ export async function createGcash(request: Request, response: Response) {
     await unlink(request.file.path).catch(() => undefined);
     throw error;
   }
-}
-
-export async function createPaymongoQrph(request: Request, response: Response) {
-  const input = paymongoQrphReservationSchema.parse(request.body);
-  const result = await createPaymongoQrphReservation({ ...input, passengerId: request.auth!.userId });
-  response.status(201).json(result);
 }
 
 export async function paymongoQrphCheckout(request: Request, response: Response) {

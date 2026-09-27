@@ -19,8 +19,6 @@ export const paypalReservationSchema = z.object({
   contact: z.string().trim().min(7).max(32),
 });
 
-export const paymongoQrphReservationSchema = paypalReservationSchema;
-
 export const gcashReservationSchema = paypalReservationSchema.extend({
   gcashReference: z.string().trim().max(100).optional().default(''),
 });
