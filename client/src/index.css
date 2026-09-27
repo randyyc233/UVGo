@@ -33,8 +33,11 @@ textarea {
   font: inherit;
 }
 
+/* Focus indicators must be visible and use the UVGo primary color
+   (docs/accessibility-and-responsive.md). The 2px offset keeps the ring
+   readable even on primary-green buttons. */
 :focus-visible {
-  outline: 3px solid rgba(23, 105, 224, 0.35);
+  outline: 3px solid #087a36;
   outline-offset: 2px;
 }
 

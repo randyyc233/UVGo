@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { MapPin, Play, RotateCcw } from 'lucide-react';
+import { MapPin, Play } from 'lucide-react';
 import { apiRequest, ApiError } from '../../api/http';
 import { Button, Card, LoadingSkeleton, StatusBadge, useToast } from '../ui';
 
@@ -56,7 +56,7 @@ export function DemoControls() {
     setError(null);
     try {
       await apiRequest(`/dispatcher/demo/${kind === 'geofence' ? 'geofence-entry' : 'dispatch-engine'}`, { method: 'POST' });
-      toast.success(kind === 'geofence' ? 'VAN-005 geofence entry simulated.' : 'Dispatch engine evaluation completed.');
+      toast.success(kind === 'geofence' ? `${state?.geofenceVehicle?.vanId ?? 'Route vehicle'} geofence entry simulated.` : 'Route dispatch engine evaluation completed.');
       await loadState();
     } catch (caught) {
       setError(caught instanceof ApiError ? caught.message : 'The demo simulation could not be completed.');
@@ -92,10 +92,6 @@ export function DemoControls() {
       )}
 
       {error ? <p role="alert" className="mt-4 rounded-control bg-danger-soft p-3 text-sm text-danger">{error}</p> : null}
-      <div className="mt-4 flex items-start gap-3 rounded-control bg-primary-soft p-4 text-sm text-primary-dark">
-        <RotateCcw className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
-        <p>Restore the exact baseline from the project terminal with <code className="font-bold">npm run demo:reset</code>.</p>
-      </div>
     </Card>
   );
 }

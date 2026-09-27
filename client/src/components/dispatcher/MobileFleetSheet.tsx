@@ -1,5 +1,6 @@
 import { ChevronUp } from 'lucide-react';
 import { useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
+import { formatDateTime12 } from '../../lib/dateTime';
 import type { FleetSnapshot } from '../../types/dispatcher';
 import { Card, StatusBadge } from '../ui';
 
@@ -7,21 +8,20 @@ function label(value: string) {
   return value.replaceAll('_', ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
-function tone(value: string): 'success' | 'warning' | 'danger' | 'info' | 'neutral' {
-  if (['ready_for_dispatch', 'accepted', 'verified', 'captured', 'confirmed', 'at_terminal'].includes(value)) return 'success';
-  if (['pending', 'pending_verification', 'waiting', 'loading', 'assigned'].includes(value)) return 'warning';
-  if (['delayed', 'rejected', 'replaced', 'unavailable'].includes(value)) return 'danger';
-  if (['incoming', 'assigning'].includes(value)) return 'info';
-  return 'neutral';
+function time(value: string) {
+  return formatDateTime12(value);
 }
 
-function time(value: string) {
-  return new Date(value).toLocaleString('en-PH', {
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  });
+function locationLabel(vehicle: FleetSnapshot['vehicles'][number]) {
+  if (vehicle.insideTerminalZone) return 'Ready for departure';
+  if (vehicle.insideActiveZone) return 'Within 5 km Active Zone';
+  return 'Outside 5 km Active Zone';
+}
+
+function locationTone(vehicle: FleetSnapshot['vehicles'][number]): 'success' | 'info' | 'neutral' {
+  if (vehicle.insideTerminalZone) return 'success';
+  if (vehicle.insideActiveZone) return 'info';
+  return 'neutral';
 }
 
 interface DragGesture {
@@ -119,13 +119,17 @@ export function MobileFleetSheet({ fleet }: { fleet: FleetSnapshot }) {
               <div key={vehicle.id} className="rounded-control border border-border p-3">
                 <div className="flex items-center justify-between gap-3">
                   <p className="font-bold">{vehicle.vanId}</p>
-                  <StatusBadge tone={tone(vehicle.status)}>{label(vehicle.status)}</StatusBadge>
+                  <StatusBadge tone={locationTone(vehicle)}>{locationLabel(vehicle)}</StatusBadge>
                 </div>
                 <p className="mt-1 text-xs text-text-secondary">
                   {vehicle.driver} · {vehicle.route} · Queue #{vehicle.queuePosition ?? '—'}
                 </p>
                 <p className="mt-2 text-xs font-semibold text-primary-dark">
-                  {vehicle.insideActiveZone ? 'Inside Active Zone' : 'Outside Active Zone'}
+                  {vehicle.insideTerminalZone
+                    ? 'Inside 100-meter terminal zone · departure ready'
+                    : vehicle.insideActiveZone
+                      ? 'Inside 5 km Active Zone · approaching terminal'
+                      : 'Outside 5 km Active Zone'}
                 </p>
               </div>
             ))}

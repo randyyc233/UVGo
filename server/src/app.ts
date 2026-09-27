@@ -7,6 +7,8 @@ import { errorHandler, notFoundHandler } from './middleware/errorMiddleware.js';
 import { authRouter } from './routes/authRoutes.js';
 import { dispatcherRouter, driverRouter, passengerRouter } from './routes/roleRoutes.js';
 import { publicRouter } from './routes/publicRoutes.js';
+import { receivePaymongoWebhook } from './controllers/paymongoWebhookController.js';
+import { asyncHandler } from './utils/asyncHandler.js';
 
 export const app = express();
 
@@ -31,6 +33,9 @@ app.use(
     credentials: true,
   }),
 );
+// PayMongo signs the exact request bytes. This route must stay before the
+// global JSON parser or legitimate signatures will no longer verify.
+app.post('/api/webhooks/paymongo', express.raw({ type: 'application/json', limit: '256kb' }), asyncHandler(receivePaymongoWebhook));
 app.use(express.json({ limit: '1mb' }));
 app.use(cookieParser());
 

@@ -1,5 +1,5 @@
-import { useState, type FormEvent } from 'react';
-import { ArrowRight, Eye, EyeOff, House, LockKeyhole, Mail, ShieldCheck } from 'lucide-react';
+import { useRef, useState, type FormEvent } from 'react';
+import { AlertCircle, ArrowRight, Eye, EyeOff, House, LockKeyhole, Mail, ShieldCheck } from 'lucide-react';
 import { Link, Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { Logo } from '../../components/brand/Logo';
 import { HeroBackgroundSlideshow } from '../../components/public/HeroBackgroundSlideshow';
@@ -8,7 +8,8 @@ import { ApiError } from '../../api/http';
 import { useAuth } from '../../auth/authContext';
 
 const demoAccounts = [
-  { label: 'Dispatcher', email: 'dispatcher@uvgo.demo' },
+  { label: 'Goa dispatcher', email: 'dispatcher@uvgo.demo' },
+  { label: 'Legazpi dispatcher', email: 'dispatcher.legazpi@uvgo.demo' },
   { label: 'Driver', email: 'driver.rodel@uvgo.demo' },
   { label: 'Passenger', email: 'passenger@uvgo.demo' },
 ];
@@ -22,6 +23,9 @@ export function LoginPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [fieldErrors, setFieldErrors] = useState<{ email?: string; password?: string }>({});
+  const emailRef = useRef<HTMLInputElement>(null);
+  const passwordRef = useRef<HTMLInputElement>(null);
   const requestedPath = (location.state as { from?: string } | null)?.from;
 
   if (!authLoading && user) {
@@ -29,9 +33,43 @@ export function LoginPage() {
     return <Navigate to={destination} replace />;
   }
 
+  // Field-level errors are shown inline on the inputs, so the summary banner is
+  // reserved for errors that concern the whole form. This keeps a single red
+  // surface on screen instead of stacking a banner on top of a highlighted field.
+  function showFieldErrors(nextErrors: { email?: string; password?: string }) {
+    setFieldErrors(nextErrors);
+    setError(null);
+    if (nextErrors.email) {
+      emailRef.current?.focus();
+    } else if (nextErrors.password) {
+      passwordRef.current?.focus();
+    }
+  }
+
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError(null);
+    setFieldErrors({});
+
+    const nextErrors: { email?: string; password?: string } = {};
+    const normalizedEmail = email.trim();
+    if (!normalizedEmail) {
+      nextErrors.email = 'Please enter your email address.';
+    } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
+      nextErrors.email = 'Please enter a valid email address.';
+    }
+
+    if (!password) {
+      nextErrors.password = 'Please enter your password.';
+    } else if (password.length < 8) {
+      nextErrors.password = 'Password must be at least 8 characters.';
+    }
+
+    if (nextErrors.email || nextErrors.password) {
+      showFieldErrors(nextErrors);
+      return;
+    }
+
     setSubmitting(true);
 
     try {
@@ -39,7 +77,32 @@ export function LoginPage() {
       const canResumeRequestedPath = Boolean(requestedPath?.startsWith(`/${authenticatedUser.role}/`));
       navigate(canResumeRequestedPath && requestedPath ? requestedPath : authenticatedUser.redirectTo, { replace: true });
     } catch (caughtError) {
-      setError(caughtError instanceof ApiError ? caughtError.message : 'Unable to sign in right now.');
+      if (caughtError instanceof ApiError) {
+        const details = caughtError.code === 'VALIDATION_ERROR' && caughtError.details && typeof caughtError.details === 'object'
+          ? (caughtError.details as Record<string, unknown>)
+          : null;
+        const apiErrors: { email?: string; password?: string } = {};
+        if (details) {
+          if (Array.isArray(details.email) && typeof details.email[0] === 'string') {
+            apiErrors.email = details.email[0];
+          }
+          if (Array.isArray(details.password) && typeof details.password[0] === 'string') {
+            apiErrors.password = details.password[0];
+          }
+        }
+
+        if (apiErrors.email || apiErrors.password) {
+          showFieldErrors(apiErrors);
+        } else {
+          // Covers INVALID_CREDENTIALS and other form-wide failures: the message
+          // applies to both fields, so it is reported once, as a banner.
+          setFieldErrors({});
+          setError(caughtError.message);
+        }
+      } else {
+        setFieldErrors({});
+        setError('Unable to sign in right now.');
+      }
     } finally {
       setSubmitting(false);
     }
@@ -49,6 +112,7 @@ export function LoginPage() {
     setEmail(accountEmail);
     setPassword('UVGoDemo123!');
     setError(null);
+    setFieldErrors({});
   }
 
   return (
@@ -92,47 +156,82 @@ export function LoginPage() {
             <h2 className="text-3xl font-extrabold tracking-tight">Welcome back</h2>
             <p className="mt-2 text-sm leading-6 text-text-secondary">Enter your UVGo account details to continue.</p>
 
+            {/* LOGIN FORM */}
             <form className="mt-6 space-y-4" onSubmit={handleSubmit} noValidate>
+              {/* Email Input */}
               <Input
+                ref={emailRef}
                 label="Email address"
                 type="email"
                 autoComplete="email"
                 value={email}
-                onChange={(event) => setEmail(event.target.value)}
+                error={fieldErrors.email}
+                onChange={(event) => {
+                  setEmail(event.target.value);
+                  if (fieldErrors.email) setFieldErrors((prev) => ({ ...prev, email: undefined }));
+                  if (error) setError(null);
+                }}
                 leadingIcon={<Mail className="h-4 w-4" />}
                 required
               />
+              {/* Password Input & toggle*/}
               <div className="relative">
                 <Input
+                  ref={passwordRef}
                   label="Password"
                   type={showPassword ? 'text' : 'password'}
                   autoComplete="current-password"
                   value={password}
-                  onChange={(event) => setPassword(event.target.value)}
+                  error={fieldErrors.password}
+                  onChange={(event) => {
+                    setPassword(event.target.value);
+                    if (fieldErrors.password) setFieldErrors((prev) => ({ ...prev, password: undefined }));
+                  if (error) setError(null);
+                  }}
+                  className="pr-11"
                   leadingIcon={<LockKeyhole className="h-4 w-4" />}
                   required
                 />
                 <button
                   type="button"
-                  className="absolute right-1 top-[1.8rem] flex min-h-touch min-w-touch items-center justify-center rounded-full text-text-secondary hover:bg-cream"
+                  className="group absolute right-1.5 top-[1.625rem] flex min-h-touch min-w-touch items-center justify-center rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2"
                   aria-label={showPassword ? 'Hide password' : 'Show password'}
                   onClick={() => setShowPassword((visible) => !visible)}
                 >
-                  {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  <span className="flex h-8 w-8 items-center justify-center rounded-full text-text-secondary transition-colors group-hover:bg-cream group-hover:text-text-primary">
+                    {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  </span>
                 </button>
               </div>
               {error ? (
-                <p role="alert" className="rounded-control border border-danger/20 bg-danger-soft p-3 text-sm text-danger">{error}</p>
+                <div
+                  role="alert"
+                  className="flex items-start gap-2.5 rounded-control border border-danger/25 bg-danger-soft px-3.5 py-3 text-sm font-medium text-danger"
+                >
+                  <AlertCircle className="mt-px h-4 w-4 shrink-0" aria-hidden="true" />
+                  <span>{error}</span>
+                </div>
               ) : null}
               <Button type="submit" size="lg" fullWidth loading={submitting} trailingIcon={<ArrowRight className="h-4 w-4" />}>
                 Sign in
               </Button>
             </form>
 
+            <p className="mt-4 text-center text-sm">
+              <Link to="/forgot-password" className="font-bold text-primary-dark underline-offset-4 hover:underline">Forgot password?</Link>
+            </p>
+
+            <p className="mt-5 text-center text-sm text-text-secondary">
+              New passenger?{' '}
+              <Link to="/signup" className="font-bold text-primary-dark underline-offset-4 hover:underline">
+                Create an account
+              </Link>
+            </p>
+
             {import.meta.env.DEV ? (
               <div className="mt-6 border-t border-border pt-5">
                 <p className="text-xs font-bold uppercase tracking-[0.12em] text-text-secondary">Demo accounts</p>
-                <div className="mt-3 grid grid-cols-3 gap-2">
+                <div className="mt-3 grid grid-cols-2 gap-2">
                   {demoAccounts.map((account) => (
                     <button
                       key={account.email}

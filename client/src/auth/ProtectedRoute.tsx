@@ -23,7 +23,7 @@ export function ProtectedRoute({ role, children }: ProtectedRouteProps) {
     );
   }
 
-  if (!user) return <Navigate to="/login" replace state={{ from: location.pathname }} />;
+  if (!user) return <Navigate to="/login" replace state={{ from: `${location.pathname}${location.search}${location.hash}` }} />;
   if (user.role !== role) return <Navigate to={user.redirectTo} replace />;
 
   return children;

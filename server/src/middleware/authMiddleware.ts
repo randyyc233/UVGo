@@ -25,6 +25,7 @@ export const requireAuthentication = asyncHandler(async (request, _response, nex
     role: user.role,
     name: user.name,
     email: user.email,
+    dispatcherRoute: user.dispatcherRoute,
   };
   next();
 });
@@ -44,4 +45,12 @@ export function requireRole(...allowedRoles: UserRole[]): RequestHandler {
     next();
   };
 }
+
+export const requireDispatcherRoute: RequestHandler = (request, _response, next) => {
+  if (!request.auth?.dispatcherRoute) {
+    next(new AppError(403, 'DISPATCHER_ROUTE_REQUIRED', 'This dispatcher account is not assigned to an operational route.'));
+    return;
+  }
+  next();
+};
 

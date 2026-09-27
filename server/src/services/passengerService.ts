@@ -6,13 +6,25 @@ import {
   ReservationStatus,
   RouteCode,
   TripStatus,
+  UserRole,
 } from '@prisma/client';
 import { randomBytes } from 'node:crypto';
+import { compare, hash } from 'bcryptjs';
+import { boardingStartFor } from '../config/dispatch.js';
+import { passengerCapacityOf } from '../config/vehicle.js';
 import { prisma } from '../lib/prisma.js';
 import { AppError } from '../utils/AppError.js';
+import { toAuthenticatedUser } from './authService.js';
 import { capturePayPalOrder, createPayPalOrder } from './paypalService.js';
+import {
+  createAndAttachPaymongoQrph,
+  createPaymongoPaymentIntent,
+  paymongoQrphAvailable,
+  retrievePaymongoPaymentIntent,
+  type PaymongoQrphCheckout,
+  type PaymongoWebhookEvent,
+} from './paymongoService.js';
 
-const SERVICE_FEE = 20;
 const activeReservationStatuses: ReservationStatus[] = [
   ReservationStatus.PENDING_PAYMENT,
   ReservationStatus.PENDING_VERIFICATION,
@@ -20,6 +32,66 @@ const activeReservationStatuses: ReservationStatus[] = [
   ReservationStatus.RESCHEDULED,
   ReservationStatus.REALLOCATED,
 ];
+
+const bookableTripStatuses: TripStatus[] = [
+  TripStatus.SCHEDULED,
+  TripStatus.ASSIGNING,
+  TripStatus.ASSIGNED,
+  TripStatus.BOARDING,
+];
+
+const reschedulableReservationStatuses: ReservationStatus[] = [
+  ReservationStatus.CONFIRMED,
+  ReservationStatus.RESCHEDULED,
+  ReservationStatus.REALLOCATED,
+];
+
+const dispatcherPaymentSelect = {
+  name: true,
+  contact: true,
+  role: true,
+  dispatcherRoute: true,
+  isActive: true,
+} satisfies Prisma.UserSelect;
+
+type DispatcherPaymentCandidate = Prisma.UserGetPayload<{ select: typeof dispatcherPaymentSelect }>;
+
+function gcashRecipient(
+  route: RouteCode,
+  ...candidates: Array<DispatcherPaymentCandidate | null | undefined>
+) {
+  const dispatcher = candidates.find((candidate) => (
+    candidate?.role === UserRole.DISPATCHER
+    && candidate.dispatcherRoute === route
+    && candidate.isActive
+    && Boolean(candidate.contact?.trim())
+  ));
+
+  return dispatcher?.contact ? {
+    dispatcherName: dispatcher.name,
+    mobileNumber: dispatcher.contact,
+  } : null;
+}
+
+async function activeRouteDispatcher(route: RouteCode) {
+  return prisma.user.findFirst({
+    where: {
+      role: UserRole.DISPATCHER,
+      dispatcherRoute: route,
+      isActive: true,
+      contact: { not: null },
+    },
+    orderBy: { createdAt: 'asc' },
+    select: dispatcherPaymentSelect,
+  });
+}
+
+function assertBookableTrip(trip: { route: RouteCode; status: TripStatus; scheduledOrTriggeredTime: Date }) {
+  if (trip.route !== RouteCode.GOA) throw new AppError(422, 'GOA_ONLY', 'Only Goa trips can be reserved.');
+  if (!bookableTripStatuses.includes(trip.status) || trip.scheduledOrTriggeredTime <= new Date()) {
+    throw new AppError(409, 'TRIP_CLOSED', 'This trip is no longer open for reservations. Choose another departure.');
+  }
+}
 
 function bookingReference() {
   const date = new Date().toISOString().slice(2, 10).replaceAll('-', '');
@@ -35,50 +107,83 @@ function dateRange(date?: string) {
 }
 
 export async function searchGoaTrips(date: string | undefined, passengers: number) {
-  const trips = await prisma.trip.findMany({
-    where: {
-      route: RouteCode.GOA,
-      status: { in: [TripStatus.SCHEDULED, TripStatus.ASSIGNING, TripStatus.ASSIGNED, TripStatus.BOARDING] },
-      scheduledOrTriggeredTime: dateRange(date),
-    },
-    orderBy: { scheduledOrTriggeredTime: 'asc' },
-    include: {
-      vehicle: { select: { vanId: true, capacity: true } },
-      reservedSeats: {
-        where: { reservation: { status: { in: activeReservationStatuses } } },
-        select: { seatNumber: true },
+  const [trips, routeDispatcher] = await Promise.all([
+    prisma.trip.findMany({
+      where: {
+        route: RouteCode.GOA,
+        status: { in: bookableTripStatuses },
+        scheduledOrTriggeredTime: dateRange(date),
       },
-    },
-  });
+      orderBy: { scheduledOrTriggeredTime: 'asc' },
+      include: {
+        createdByDispatcher: { select: dispatcherPaymentSelect },
+        vehicle: {
+          select: {
+            vanId: true,
+            capacity: true,
+            managedByDispatcher: { select: dispatcherPaymentSelect },
+          },
+        },
+        reservedSeats: {
+          where: { reservation: { status: { in: activeReservationStatuses } } },
+          select: { seatNumber: true },
+        },
+      },
+    }),
+    activeRouteDispatcher(RouteCode.GOA),
+  ]);
 
-  return trips.map((trip) => ({
-    id: trip.id,
-    route: 'Goa' as const,
-    origin: 'Naga City East Bound Terminal',
-    destination: 'Goa Terminal',
-    departureTime: trip.scheduledOrTriggeredTime.toISOString(),
-    fare: Number(trip.fareAmount),
-    serviceFee: SERVICE_FEE,
-    vanId: trip.vehicle.vanId,
-    capacity: trip.vehicle.capacity,
-    availableSeats: trip.vehicle.capacity - trip.reservedSeats.length,
-    canFitParty: trip.vehicle.capacity - trip.reservedSeats.length >= passengers,
-  }));
+  return trips.map((trip) => {
+    const capacity = passengerCapacityOf(trip.vehicle);
+    const reservedSeatCount = trip.reservedSeats.filter((seat) => seat.seatNumber >= 1 && seat.seatNumber <= capacity).length;
+    return {
+      id: trip.id,
+      route: 'Goa' as const,
+      origin: 'Naga City East Bound Terminal',
+      destination: 'Goa Terminal',
+      boardingStartTime: boardingStartFor(trip.scheduledOrTriggeredTime, trip.boardingStartTime).toISOString(),
+      departureTime: trip.scheduledOrTriggeredTime.toISOString(),
+      fare: Number(trip.fareAmount),
+      vanId: trip.vehicle.vanId,
+      capacity,
+      availableSeats: capacity - reservedSeatCount,
+      canFitParty: capacity - reservedSeatCount >= passengers,
+      gcashRecipient: gcashRecipient(
+        trip.route,
+        trip.createdByDispatcher,
+        trip.vehicle.managedByDispatcher,
+        routeDispatcher,
+      ),
+      paymongoQrphAvailable: paymongoQrphAvailable(),
+    };
+  });
 }
 
 export async function getTripSeats(tripId: string) {
-  const trip = await prisma.trip.findFirst({
-    where: { id: tripId, route: RouteCode.GOA },
-    include: {
-      vehicle: { select: { vanId: true, capacity: true } },
-      reservedSeats: {
-        where: { reservation: { status: { in: activeReservationStatuses } } },
-        select: { seatNumber: true },
+  const [trip, routeDispatcher] = await Promise.all([
+    prisma.trip.findFirst({
+      where: { id: tripId, route: RouteCode.GOA },
+      include: {
+        createdByDispatcher: { select: dispatcherPaymentSelect },
+        vehicle: {
+          select: {
+            vanId: true,
+            capacity: true,
+            managedByDispatcher: { select: dispatcherPaymentSelect },
+          },
+        },
+        reservedSeats: {
+          where: { reservation: { status: { in: activeReservationStatuses } } },
+          select: { seatNumber: true },
+        },
       },
-    },
-  });
+    }),
+    activeRouteDispatcher(RouteCode.GOA),
+  ]);
   if (!trip) throw new AppError(404, 'TRIP_NOT_FOUND', 'This Goa trip is no longer available.');
+  assertBookableTrip(trip);
 
+  const capacity = passengerCapacityOf(trip.vehicle);
   const unavailable = new Set(trip.reservedSeats.map((seat) => seat.seatNumber));
   return {
     trip: {
@@ -86,13 +191,20 @@ export async function getTripSeats(tripId: string) {
       route: 'Goa' as const,
       origin: 'Naga City East Bound Terminal',
       destination: 'Goa Terminal',
+      boardingStartTime: boardingStartFor(trip.scheduledOrTriggeredTime, trip.boardingStartTime).toISOString(),
       departureTime: trip.scheduledOrTriggeredTime.toISOString(),
       fare: Number(trip.fareAmount),
-      serviceFee: SERVICE_FEE,
       vanId: trip.vehicle.vanId,
-      capacity: trip.vehicle.capacity,
+      capacity,
+      gcashRecipient: gcashRecipient(
+        trip.route,
+        trip.createdByDispatcher,
+        trip.vehicle.managedByDispatcher,
+        routeDispatcher,
+      ),
+      paymongoQrphAvailable: paymongoQrphAvailable(),
     },
-    seats: Array.from({ length: trip.vehicle.capacity }, (_, index) => ({
+    seats: Array.from({ length: capacity }, (_, index) => ({
       number: index + 1,
       available: !unavailable.has(index + 1),
     })),
@@ -106,11 +218,19 @@ interface ReservationInput {
   contact: string;
 }
 
-function normalizeSeatConflict(error: unknown): never {
+function normalizeReservationConflict(error: unknown): never {
   if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+    if (String(error.meta?.target ?? '').includes('externalReferenceKey')) {
+      throw new AppError(409, 'PAYMENT_REFERENCE_ALREADY_REPORTED', 'This payment reference has already been submitted. Check My Bookings instead of submitting it again.');
+    }
     throw new AppError(409, 'SEAT_UNAVAILABLE', 'One or more selected seats were just reserved. Please choose another.');
   }
   throw error;
+}
+
+function externalPaymentReferenceKey(method: PaymentMethod, value: string | undefined) {
+  const normalized = value?.trim().toUpperCase();
+  return normalized ? `${method}:${normalized}` : undefined;
 }
 
 async function createReservationRecord(
@@ -119,12 +239,23 @@ async function createReservationRecord(
   method: PaymentMethod,
   paymentStatus: PaymentStatus,
   reservationStatus: ReservationStatus,
-  paymentMetadata: { gcashReference?: string; receiptImageKey?: string; receiptMimeType?: string } = {},
+  paymentMetadata: {
+    gcashReference?: string;
+    externalReferenceKey?: string;
+    receiptImageKey?: string;
+    receiptMimeType?: string;
+    paymongoPaymentIntentId?: string;
+    paymongoPaymentMethodId?: string;
+    paymongoPaymentId?: string;
+    paymongoClientKey?: string;
+    paymongoQrExpiresAt?: Date;
+  } = {},
 ) {
   const trip = await transaction.trip.findUnique({ where: { id: input.tripId }, include: { vehicle: true } });
-  if (!trip || trip.route !== RouteCode.GOA) throw new AppError(422, 'GOA_ONLY', 'Only Goa trips can be reserved.');
-  if (trip.scheduledOrTriggeredTime <= new Date()) throw new AppError(409, 'TRIP_CLOSED', 'This trip is no longer open for reservations.');
-  if (input.seats.some((seat) => seat > trip.vehicle.capacity)) throw new AppError(422, 'INVALID_SEAT', 'One or more seats do not exist on this van.');
+  if (!trip) throw new AppError(404, 'TRIP_NOT_FOUND', 'This Goa trip is no longer available.');
+  assertBookableTrip(trip);
+  const capacity = passengerCapacityOf(trip.vehicle);
+  if (input.seats.some((seat) => seat < 1 || seat > capacity)) throw new AppError(422, 'INVALID_SEAT', `Choose a seat from 1 to ${capacity}.`);
 
   const occupied = await transaction.reservationSeat.findMany({
     where: { tripId: input.tripId, seatNumber: { in: input.seats }, reservation: { status: { in: activeReservationStatuses } } },
@@ -133,7 +264,8 @@ async function createReservationRecord(
   if (occupied.length) throw new AppError(409, 'SEAT_UNAVAILABLE', `Seat ${occupied.map((seat) => seat.seatNumber).join(', ')} was just reserved. Please choose another.`);
 
   const fareAmount = Number(trip.fareAmount) * input.seats.length;
-  const totalAmount = fareAmount + SERVICE_FEE;
+  // The fare is the full per-seat price; there is no separate service fee.
+  const totalAmount = fareAmount;
   const reference = bookingReference();
   await transaction.user.update({ where: { id: input.passengerId }, data: { contact: input.contact } });
   const reservation = await transaction.reservation.create({
@@ -151,8 +283,14 @@ async function createReservationRecord(
           amount: totalAmount,
           status: paymentStatus,
           gcashReference: paymentMetadata.gcashReference || null,
+          externalReferenceKey: paymentMetadata.externalReferenceKey,
           receiptImageKey: paymentMetadata.receiptImageKey,
           receiptMimeType: paymentMetadata.receiptMimeType,
+          paymongoPaymentIntentId: paymentMetadata.paymongoPaymentIntentId,
+          paymongoPaymentMethodId: paymentMetadata.paymongoPaymentMethodId,
+          paymongoPaymentId: paymentMetadata.paymongoPaymentId,
+          paymongoClientKey: paymentMetadata.paymongoClientKey,
+          paymongoQrExpiresAt: paymentMetadata.paymongoQrExpiresAt,
         },
       },
     },
@@ -162,21 +300,175 @@ async function createReservationRecord(
 }
 
 export async function createGcashReservation(input: ReservationInput & { gcashReference?: string; receiptImageKey: string; receiptMimeType: string }) {
+  const gcashReference = input.gcashReference?.trim();
+  const externalReferenceKey = externalPaymentReferenceKey(PaymentMethod.GCASH_RECEIPT, gcashReference);
   let result;
   try {
-    result = await prisma.$transaction((transaction) => createReservationRecord(
+    result = await prisma.$transaction(async (transaction) => {
+      if (externalReferenceKey && await transaction.payment.findUnique({ where: { externalReferenceKey }, select: { id: true } })) {
+        throw new AppError(409, 'PAYMENT_REFERENCE_ALREADY_REPORTED', 'This GCash reference has already been submitted. Check My Bookings instead of submitting it again.');
+      }
+      const created = await createReservationRecord(
+        transaction,
+        input,
+        PaymentMethod.GCASH_RECEIPT,
+        PaymentStatus.PENDING_VERIFICATION,
+        ReservationStatus.PENDING_VERIFICATION,
+        { ...input, gcashReference, externalReferenceKey },
+      );
+      await transaction.notification.create({ data: { userId: input.passengerId, type: NotificationType.PAYMENT, message: `GCash receipt received for ${created.reservation.reference}. Verification is pending.` } });
+      return created;
+    });
+  } catch (error) {
+    normalizeReservationConflict(error);
+  }
+  return getPassengerBooking(input.passengerId, result.reservation.reference);
+}
+
+/**
+ * Creates the reservation that backs a dashboard-configured ("hosted") PayPal
+ * button payment.
+ *
+ * The hosted button charges the passenger on PayPal's own checkout page, which
+ * never hands an order id back to UVGo, so this path cannot be captured
+ * server-side the way `createPaypalReservation` is. The reservation is
+ * therefore parked at PENDING_VERIFICATION, exactly like a GCash receipt, and a
+ * dispatcher confirms it once the payment shows up in the PayPal account.
+ *
+ * Unlike `createGcashReservation` this takes no uploaded receipt — the proof of
+ * payment is the PayPal transaction itself. `paypalOrderId` is not set because
+ * there is no order id to record; `paypalTransactionReference` stores whatever
+ * reference the passenger supplies from their PayPal receipt.
+ */
+export async function createPaypalHostedReservation(input: ReservationInput & { paypalTransactionReference?: string }) {
+  const paypalTransactionReference = input.paypalTransactionReference?.trim();
+  if (!paypalTransactionReference) throw new AppError(422, 'PAYPAL_REFERENCE_REQUIRED', 'Enter the transaction reference from your completed PayPal payment.');
+  const externalReferenceKey = externalPaymentReferenceKey(PaymentMethod.PAYPAL, paypalTransactionReference)!;
+  let result;
+  try {
+    result = await prisma.$transaction(async (transaction) => {
+      const previouslyReported = await transaction.payment.findUnique({ where: { externalReferenceKey }, select: { id: true } });
+      if (previouslyReported) {
+        throw new AppError(409, 'PAYPAL_REFERENCE_ALREADY_REPORTED', 'This PayPal transaction reference has already been submitted. Check My Bookings instead of submitting it again.');
+      }
+      const created = await createReservationRecord(
+        transaction,
+        input,
+        PaymentMethod.PAYPAL,
+        PaymentStatus.PENDING_VERIFICATION,
+        ReservationStatus.PENDING_VERIFICATION,
+        { gcashReference: paypalTransactionReference, externalReferenceKey },
+      );
+      await transaction.notification.create({ data: { userId: input.passengerId, type: NotificationType.PAYMENT, message: `PayPal payment reported for ${created.reservation.reference}. Verification is pending.` } });
+      return created;
+    });
+  } catch (error) {
+    normalizeReservationConflict(error);
+  }
+  return getPassengerBooking(input.passengerId, result.reservation.reference);
+}
+
+function totalToCentavos(totalAmount: number) {
+  const centavos = Math.round(totalAmount * 100);
+  if (!Number.isSafeInteger(centavos) || centavos < 100) {
+    throw new AppError(422, 'INVALID_PAYMENT_AMOUNT', 'The reservation total cannot be processed through QR Ph.');
+  }
+  return centavos;
+}
+
+function qrphCheckoutFromIntent(
+  intent: { data: { id: string; attributes: { livemode: boolean; next_action?: { code?: { image_url?: string; test_url?: string } } | null } } },
+  expiresAt: Date | null,
+): PaymongoQrphCheckout | null {
+  const qrImageUrl = intent.data.attributes.next_action?.code?.image_url;
+  if (!qrImageUrl || !/^data:image\/(?:png|jpeg|webp);base64,/i.test(qrImageUrl) || !expiresAt) return null;
+  const testUrl = intent.data.attributes.next_action?.code?.test_url;
+  return {
+    paymentIntentId: intent.data.id,
+    qrImageUrl,
+    expiresAt: expiresAt.toISOString(),
+    livemode: intent.data.attributes.livemode,
+    testUrl: testUrl && /^https:\/\//i.test(testUrl) ? testUrl : null,
+  };
+}
+
+export async function createPaymongoQrphReservation(input: ReservationInput) {
+  let created;
+  try {
+    created = await prisma.$transaction((transaction) => createReservationRecord(
       transaction,
       input,
-      PaymentMethod.GCASH_RECEIPT,
-      PaymentStatus.PENDING_VERIFICATION,
-      ReservationStatus.PENDING_VERIFICATION,
-      input,
+      PaymentMethod.PAYMONGO_QRPH,
+      PaymentStatus.PENDING,
+      ReservationStatus.PENDING_PAYMENT,
     ));
   } catch (error) {
-    normalizeSeatConflict(error);
+    normalizeReservationConflict(error);
   }
-  await prisma.notification.create({ data: { userId: input.passengerId, type: NotificationType.PAYMENT, message: `GCash receipt received for ${result.reservation.reference}. Verification is pending.` } });
-  return getPassengerBooking(input.passengerId, result.reservation.reference);
+
+  const payment = created.reservation.payments[0];
+  if (!payment) {
+    await prisma.reservation.delete({ where: { id: created.reservation.id } }).catch(() => undefined);
+    throw new AppError(500, 'PAYMENT_NOT_CREATED', 'The QR Ph payment record was not created.');
+  }
+
+  try {
+    const passenger = await prisma.user.findUnique({
+      where: { id: input.passengerId },
+      select: { name: true, email: true, contact: true },
+    });
+    if (!passenger) throw new AppError(404, 'PASSENGER_NOT_FOUND', 'The passenger account could not be found.');
+
+    const intent = await createPaymongoPaymentIntent({
+      amountCentavos: totalToCentavos(created.totalAmount),
+      reservationReference: created.reservation.reference,
+      idempotencyKey: `uvgo-qrph-intent-${payment.id}`,
+    });
+    await prisma.payment.update({
+      where: { id: payment.id },
+      data: {
+        paymongoPaymentIntentId: intent.data.id,
+        paymongoClientKey: intent.data.attributes.client_key,
+      },
+    });
+
+    const attached = await createAndAttachPaymongoQrph({
+      paymentIntentId: intent.data.id,
+      clientKey: intent.data.attributes.client_key,
+      paymentRecordId: payment.id,
+      billing: {
+        name: passenger.name,
+        email: passenger.email,
+        phone: passenger.contact ?? input.contact,
+      },
+    });
+    const expiresAt = new Date(attached.checkout.expiresAt);
+    await prisma.$transaction([
+      prisma.payment.update({
+        where: { id: payment.id },
+        data: {
+          paymongoPaymentMethodId: attached.paymentMethodId,
+          paymongoQrExpiresAt: expiresAt,
+        },
+      }),
+      prisma.notification.create({
+        data: {
+          userId: input.passengerId,
+          type: NotificationType.PAYMENT,
+          message: `QR Ph payment is ready for ${created.reservation.reference}. Scan and pay before ${expiresAt.toLocaleString('en-PH', { timeZone: 'Asia/Manila', dateStyle: 'medium', timeStyle: 'short', hour12: true })}.`,
+        },
+      }),
+    ]);
+    return {
+      booking: await getPassengerBooking(input.passengerId, created.reservation.reference),
+      checkout: attached.checkout,
+    };
+  } catch (error) {
+    // A QR was never delivered to the passenger, so release the seat hold. Any
+    // remote intent created before the failure is unreachable and cannot be paid.
+    await prisma.reservation.delete({ where: { id: created.reservation.id } }).catch(() => undefined);
+    throw error;
+  }
 }
 
 export async function createPaypalReservation(input: ReservationInput) {
@@ -190,7 +482,7 @@ export async function createPaypalReservation(input: ReservationInput) {
       ReservationStatus.PENDING_PAYMENT,
     ));
   } catch (error) {
-    normalizeSeatConflict(error);
+    normalizeReservationConflict(error);
   }
   try {
     const order = await createPayPalOrder(result.reservation.reference, result.totalAmount);
@@ -218,20 +510,57 @@ export async function capturePaypalReservation(passengerId: string, reference: s
   await prisma.$transaction([
     prisma.payment.update({ where: { id: payment.id }, data: { status: PaymentStatus.CAPTURED, paidAt: new Date() } }),
     prisma.reservation.update({ where: { id: reservation.id }, data: { status: ReservationStatus.CONFIRMED } }),
-    prisma.notification.create({ data: { userId: passengerId, type: NotificationType.BOOKING, message: `Your Goa booking ${reference} is confirmed.` } }),
+    prisma.notification.create({ data: { userId: passengerId, type: NotificationType.BOOKING, message: `Your Goa booking ${reference} is confirmed. Bring a valid ID and your reservation reference to the terminal.` } }),
   ]);
   return getPassengerBooking(passengerId, reference);
 }
 
+/**
+ * Releases the seat hold created for an abandoned PayPal checkout. When the
+ * passenger closes the PayPal window nothing was paid, so the held seats must go
+ * back to the pool — otherwise a single cancelled attempt would block those seats
+ * permanently, because PENDING_PAYMENT counts as an active reservation.
+ *
+ * Deliberately refuses to act unless the payment is still PENDING, so a capture
+ * that wins the race against onCancel can never have its booking deleted.
+ */
+export async function releasePaypalReservation(passengerId: string, reference: string) {
+  const reservation = await prisma.reservation.findFirst({
+    where: { reference, passengerId },
+    include: { payments: { where: { method: PaymentMethod.PAYPAL }, take: 1 } },
+  });
+  const payment = reservation?.payments[0];
+  const isUnpaidHold =
+    reservation?.status === ReservationStatus.PENDING_PAYMENT && payment?.status === PaymentStatus.PENDING;
+  if (!reservation || !isUnpaidHold) return { released: false };
+
+  await prisma.reservation.delete({ where: { id: reservation.id } });
+  return { released: true };
+}
+
 const bookingInclude = {
-  trip: { include: { vehicle: { select: { vanId: true } } } },
+  trip: {
+    include: {
+      createdByDispatcher: { select: dispatcherPaymentSelect },
+      vehicle: {
+        select: {
+          vanId: true,
+          managedByDispatcher: { select: dispatcherPaymentSelect },
+        },
+      },
+    },
+  },
   seats: { orderBy: { seatNumber: 'asc' as const } },
   payments: { orderBy: { createdAt: 'desc' as const }, take: 1 },
 } satisfies Prisma.ReservationInclude;
 
-function serializeBooking(booking: Prisma.ReservationGetPayload<{ include: typeof bookingInclude }>) {
+function serializeBooking(
+  booking: Prisma.ReservationGetPayload<{ include: typeof bookingInclude }>,
+  routeDispatcher?: DispatcherPaymentCandidate | null,
+) {
   const payment = booking.payments[0] ?? null;
   const hoursUntilDeparture = (booking.trip.scheduledOrTriggeredTime.getTime() - Date.now()) / 3_600_000;
+  const reschedulableStatus = reschedulableReservationStatuses.includes(booking.status);
   return {
     id: booking.id,
     tripId: booking.tripId,
@@ -239,66 +568,323 @@ function serializeBooking(booking: Prisma.ReservationGetPayload<{ include: typeo
     route: 'Goa' as const,
     origin: 'Naga City East Bound Terminal',
     destination: 'Goa Terminal',
+    boardingStartTime: boardingStartFor(booking.trip.scheduledOrTriggeredTime, booking.trip.boardingStartTime).toISOString(),
     departureTime: booking.trip.scheduledOrTriggeredTime.toISOString(),
     vanId: booking.trip.vehicle.vanId,
     seats: booking.seats.map((seat) => seat.seatNumber),
     seatCount: booking.seatCount,
     fareAmount: Number(booking.fareAmount),
-    serviceFee: SERVICE_FEE,
-    totalAmount: payment ? Number(payment.amount) : Number(booking.fareAmount) + SERVICE_FEE,
+    totalAmount: payment ? Number(payment.amount) : Number(booking.fareAmount),
     status: booking.status.toLowerCase(),
     payment: payment ? {
-      method: payment.method === PaymentMethod.PAYPAL ? 'paypal' : 'gcash',
+      method: payment.method === PaymentMethod.PAYPAL
+        ? 'paypal'
+        : payment.method === PaymentMethod.PAYMONGO_QRPH
+          ? 'paymongo_qrph'
+          : 'gcash',
       status: payment.status.toLowerCase(),
+      transactionReference: payment.paymongoPaymentId ?? payment.paymongoPaymentIntentId ?? payment.paypalOrderId ?? payment.gcashReference,
       gcashReference: payment.gcashReference,
+      rejectionReason: payment.rejectionReason,
+      qrExpiresAt: payment.paymongoQrExpiresAt?.toISOString() ?? null,
     } : null,
-    canReschedule: hoursUntilDeparture >= 24 && booking.status !== ReservationStatus.FORFEITED,
-    rescheduleMessage: hoursUntilDeparture >= 24 ? 'Eligible to reschedule.' : 'Rescheduling closes 24 hours before departure.',
+    gcashRecipient: gcashRecipient(
+      booking.trip.route,
+      booking.trip.createdByDispatcher,
+      booking.trip.vehicle.managedByDispatcher,
+      routeDispatcher,
+    ),
+    canReschedule: hoursUntilDeparture >= 24 && reschedulableStatus,
+    rescheduleMessage: !reschedulableStatus
+      ? 'Payment must be confirmed before this booking can be rescheduled.'
+      : hoursUntilDeparture >= 24
+        ? 'Eligible to reschedule.'
+        : 'Rescheduling closes 24 hours before departure.',
     createdAt: booking.createdAt.toISOString(),
   };
 }
 
 export async function getPassengerBookings(passengerId: string) {
-  const bookings = await prisma.reservation.findMany({ where: { passengerId }, orderBy: { createdAt: 'desc' }, include: bookingInclude });
-  return bookings.map(serializeBooking);
+  const [bookings, routeDispatcher] = await Promise.all([
+    prisma.reservation.findMany({ where: { passengerId }, orderBy: { createdAt: 'desc' }, include: bookingInclude }),
+    activeRouteDispatcher(RouteCode.GOA),
+  ]);
+  return bookings.map((booking) => serializeBooking(booking, routeDispatcher));
 }
 
 export async function getPassengerBooking(passengerId: string, reference: string) {
-  const booking = await prisma.reservation.findFirst({ where: { passengerId, reference }, include: bookingInclude });
+  const [booking, routeDispatcher] = await Promise.all([
+    prisma.reservation.findFirst({ where: { passengerId, reference }, include: bookingInclude }),
+    activeRouteDispatcher(RouteCode.GOA),
+  ]);
   if (!booking) throw new AppError(404, 'BOOKING_NOT_FOUND', 'This booking could not be found.');
-  return serializeBooking(booking);
+  return serializeBooking(booking, routeDispatcher);
+}
+
+async function completePaymongoQrphPayment(input: {
+  paymentIntentId: string;
+  paymentId?: string;
+  amountCentavos: number;
+  currency: string;
+  paidAt?: Date;
+}) {
+  const payment = await prisma.payment.findUnique({
+    where: { paymongoPaymentIntentId: input.paymentIntentId },
+    include: { reservation: true },
+  });
+  if (!payment || payment.method !== PaymentMethod.PAYMONGO_QRPH) return false;
+
+  const expectedCentavos = totalToCentavos(Number(payment.amount));
+  if (input.currency !== 'PHP' || input.amountCentavos !== expectedCentavos) {
+    throw new AppError(409, 'PAYMONGO_PAYMENT_MISMATCH', 'The PayMongo payment amount or currency does not match the UVGo reservation.');
+  }
+
+  return prisma.$transaction(async (transaction) => {
+    const updated = await transaction.payment.updateMany({
+      where: { id: payment.id, method: PaymentMethod.PAYMONGO_QRPH, status: PaymentStatus.PENDING },
+      data: {
+        status: PaymentStatus.CAPTURED,
+        paidAt: input.paidAt ?? new Date(),
+        paymongoPaymentId: input.paymentId ?? payment.paymongoPaymentId,
+      },
+    });
+    if (!updated.count) return false;
+
+    await transaction.reservation.update({
+      where: { id: payment.reservationId },
+      data: { status: ReservationStatus.CONFIRMED },
+    });
+    await transaction.notification.create({
+      data: {
+        userId: payment.reservation.passengerId,
+        type: NotificationType.BOOKING,
+        message: `QR Ph payment received. Your Goa booking ${payment.reservation.reference} is confirmed. Bring a valid ID and your reservation reference to the terminal.`,
+      },
+    });
+    return true;
+  });
+}
+
+async function failPaymongoQrphPayment(input: { paymentIntentId?: string; paymentMethodId?: string }, reason: string) {
+  if (!input.paymentIntentId && !input.paymentMethodId) return false;
+  const payment = await prisma.payment.findFirst({
+    where: {
+      method: PaymentMethod.PAYMONGO_QRPH,
+      OR: [
+        ...(input.paymentIntentId ? [{ paymongoPaymentIntentId: input.paymentIntentId }] : []),
+        ...(input.paymentMethodId ? [{ paymongoPaymentMethodId: input.paymentMethodId }] : []),
+      ],
+    },
+    include: { reservation: true },
+  });
+  if (!payment) return false;
+
+  return prisma.$transaction(async (transaction) => {
+    const updated = await transaction.payment.updateMany({
+      where: { id: payment.id, status: PaymentStatus.PENDING },
+      data: { status: PaymentStatus.FAILED, rejectionReason: reason },
+    });
+    if (!updated.count) return false;
+    await transaction.reservation.update({ where: { id: payment.reservationId }, data: { status: ReservationStatus.FORFEITED } });
+    await transaction.notification.create({
+      data: {
+        userId: payment.reservation.passengerId,
+        type: NotificationType.PAYMENT,
+        message: `QR Ph payment for ${payment.reservation.reference} ${reason.toLowerCase()} The held seats were released; start a new booking to try again.`,
+      },
+    });
+    return true;
+  });
+}
+
+export async function getPaymongoQrphCheckout(passengerId: string, reference: string) {
+  const payment = await prisma.payment.findFirst({
+    where: {
+      method: PaymentMethod.PAYMONGO_QRPH,
+      reservation: { passengerId, reference },
+    },
+    include: { reservation: true },
+  });
+  if (!payment?.paymongoPaymentIntentId) throw new AppError(404, 'QRPH_PAYMENT_NOT_FOUND', 'This QR Ph payment could not be found.');
+
+  let checkout: PaymongoQrphCheckout | null = null;
+  if (payment.status === PaymentStatus.PENDING) {
+    const intent = await retrievePaymongoPaymentIntent(payment.paymongoPaymentIntentId);
+    if (intent.data.attributes.status === 'succeeded') {
+      const paidPayment = intent.data.attributes.payments?.find((item) => item.attributes.status === 'paid')
+        ?? intent.data.attributes.payments?.at(-1);
+      await completePaymongoQrphPayment({
+        paymentIntentId: intent.data.id,
+        paymentId: paidPayment?.id,
+        amountCentavos: intent.data.attributes.amount,
+        currency: intent.data.attributes.currency,
+        paidAt: paidPayment?.attributes.paid_at ? new Date(paidPayment.attributes.paid_at * 1_000) : new Date(),
+      });
+    } else if (payment.paymongoQrExpiresAt && payment.paymongoQrExpiresAt <= new Date()) {
+      await failPaymongoQrphPayment(
+        { paymentIntentId: payment.paymongoPaymentIntentId, paymentMethodId: payment.paymongoPaymentMethodId ?? undefined },
+        'expired before it was completed.',
+      );
+    } else {
+      checkout = qrphCheckoutFromIntent(intent, payment.paymongoQrExpiresAt);
+    }
+  }
+
+  return {
+    booking: await getPassengerBooking(passengerId, reference),
+    checkout,
+  };
+}
+
+export async function processPaymongoWebhookEvent(event: PaymongoWebhookEvent) {
+  const eventType = event.data.attributes.type;
+  const resource = event.data.attributes.data;
+  const attributes = resource.attributes;
+  const paymentIntentId = typeof attributes.payment_intent_id === 'string'
+    ? attributes.payment_intent_id
+    : typeof (attributes.payment_intent as { id?: unknown } | undefined)?.id === 'string'
+      ? String((attributes.payment_intent as { id: string }).id)
+      : undefined;
+
+  if (eventType === 'payment.paid' && paymentIntentId) {
+    const amount = attributes.amount;
+    const currency = attributes.currency;
+    const status = attributes.status;
+    if (typeof amount !== 'number' || typeof currency !== 'string' || status !== 'paid') return;
+    await completePaymongoQrphPayment({
+      paymentIntentId,
+      paymentId: resource.id,
+      amountCentavos: amount,
+      currency,
+      paidAt: typeof attributes.paid_at === 'number' ? new Date(attributes.paid_at * 1_000) : new Date(),
+    });
+    return;
+  }
+
+  if (eventType === 'payment.failed') {
+    await failPaymongoQrphPayment(
+      { paymentIntentId, paymentMethodId: resource.type === 'payment_method' ? resource.id : undefined },
+      'failed before it was completed.',
+    );
+    return;
+  }
+
+  if (eventType === 'qrph.expired') {
+    await failPaymongoQrphPayment(
+      { paymentIntentId, paymentMethodId: resource.id },
+      'expired before it was completed.',
+    );
+  }
 }
 
 export async function reschedulePassengerBooking(passengerId: string, reference: string, tripId: string, seats: number[]) {
-  await prisma.$transaction(async (transaction) => {
-    const booking = await transaction.reservation.findFirst({ where: { passengerId, reference }, include: { trip: true } });
-    if (!booking) throw new AppError(404, 'BOOKING_NOT_FOUND', 'This booking could not be found.');
-    if (booking.trip.scheduledOrTriggeredTime.getTime() - Date.now() < 86_400_000) {
-      throw new AppError(409, 'RESCHEDULE_WINDOW_CLOSED', 'Rescheduling closes 24 hours before departure.');
-    }
-    if (seats.length !== booking.seatCount) throw new AppError(422, 'SEAT_COUNT_MISMATCH', `Choose exactly ${booking.seatCount} seat(s).`);
-    const target = await transaction.trip.findUnique({ where: { id: tripId }, include: { vehicle: true } });
-    if (!target || target.route !== RouteCode.GOA || target.scheduledOrTriggeredTime <= new Date()) {
-      throw new AppError(422, 'INVALID_RESCHEDULE_TRIP', 'Choose a future Goa trip.');
-    }
-    if (seats.some((seat) => seat > target.vehicle.capacity)) throw new AppError(422, 'INVALID_SEAT', 'One or more seats do not exist on this van.');
-    const occupied = await transaction.reservationSeat.findMany({ where: { tripId, seatNumber: { in: seats } } });
-    if (occupied.length) throw new AppError(409, 'SEAT_UNAVAILABLE', 'One or more selected seats are no longer available.');
-    await transaction.reservationSeat.deleteMany({ where: { reservationId: booking.id } });
-    await transaction.reservation.update({
-      where: { id: booking.id },
-      data: {
-        tripId,
-        status: ReservationStatus.RESCHEDULED,
-        seats: { create: seats.map((seatNumber) => ({ tripId, seatNumber })) },
-      },
+  try {
+    await prisma.$transaction(async (transaction) => {
+      const booking = await transaction.reservation.findFirst({ where: { passengerId, reference }, include: { trip: true } });
+      if (!booking) throw new AppError(404, 'BOOKING_NOT_FOUND', 'This booking could not be found.');
+      if (!reschedulableReservationStatuses.includes(booking.status)) {
+        throw new AppError(409, 'BOOKING_NOT_RESCHEDULABLE', 'Only a confirmed booking can be rescheduled.');
+      }
+      if (booking.trip.scheduledOrTriggeredTime.getTime() - Date.now() < 86_400_000) {
+        throw new AppError(409, 'RESCHEDULE_WINDOW_CLOSED', 'Rescheduling closes 24 hours before departure.');
+      }
+      if (seats.length !== booking.seatCount) throw new AppError(422, 'SEAT_COUNT_MISMATCH', `Choose exactly ${booking.seatCount} seat(s).`);
+      const target = await transaction.trip.findUnique({ where: { id: tripId }, include: { vehicle: true } });
+      if (!target || target.route !== RouteCode.GOA || !bookableTripStatuses.includes(target.status) || target.scheduledOrTriggeredTime <= new Date()) {
+        throw new AppError(422, 'INVALID_RESCHEDULE_TRIP', 'Choose an open future Goa trip.');
+      }
+      const capacity = passengerCapacityOf(target.vehicle);
+      if (seats.some((seat) => seat < 1 || seat > capacity)) throw new AppError(422, 'INVALID_SEAT', `Choose a seat from 1 to ${capacity}.`);
+      const occupied = await transaction.reservationSeat.findMany({
+        where: {
+          reservationId: { not: booking.id },
+          tripId,
+          seatNumber: { in: seats },
+          reservation: { status: { in: activeReservationStatuses } },
+        },
+      });
+      if (occupied.length) throw new AppError(409, 'SEAT_UNAVAILABLE', 'One or more selected seats are no longer available.');
+      await transaction.reservationSeat.deleteMany({ where: { reservationId: booking.id } });
+      await transaction.reservation.update({
+        where: { id: booking.id },
+        data: {
+          tripId,
+          status: ReservationStatus.RESCHEDULED,
+          seats: { create: seats.map((seatNumber) => ({ tripId, seatNumber })) },
+        },
+      });
+      await transaction.notification.create({ data: { userId: passengerId, type: NotificationType.BOOKING, message: `Booking ${reference} was rescheduled.` } });
     });
-    await transaction.notification.create({ data: { userId: passengerId, type: NotificationType.BOOKING, message: `Booking ${reference} was rescheduled.` } });
-  });
+  } catch (error) {
+    normalizeReservationConflict(error);
+  }
   return getPassengerBooking(passengerId, reference);
 }
 
 export async function getPassengerNotifications(passengerId: string) {
   const notifications = await prisma.notification.findMany({ where: { userId: passengerId }, orderBy: { createdAt: 'desc' }, take: 50 });
   return notifications.map((notification) => ({ ...notification, type: notification.type.toLowerCase(), createdAt: notification.createdAt.toISOString() }));
+}
+
+export async function markPassengerNotificationRead(passengerId: string, notificationId: string) {
+  const result = await prisma.notification.updateMany({
+    where: { id: notificationId, userId: passengerId },
+    data: { isRead: true },
+  });
+  if (!result.count) throw new AppError(404, 'NOTIFICATION_NOT_FOUND', 'This notification is no longer available.');
+}
+
+export async function markAllPassengerNotificationsRead(passengerId: string) {
+  const result = await prisma.notification.updateMany({
+    where: { userId: passengerId, isRead: false },
+    data: { isRead: true },
+  });
+  return result.count;
+}
+
+export async function deletePassengerNotification(passengerId: string, notificationId: string) {
+  const result = await prisma.notification.deleteMany({ where: { id: notificationId, userId: passengerId } });
+  if (!result.count) throw new AppError(404, 'NOTIFICATION_NOT_FOUND', 'This notification is no longer available.');
+}
+
+interface PassengerProfileInput {
+  name: string;
+  email: string;
+  contact: string;
+}
+
+export async function updatePassengerProfile(passengerId: string, input: PassengerProfileInput) {
+  try {
+    const user = await prisma.user.update({
+      where: { id: passengerId },
+      data: {
+        name: input.name.trim(),
+        email: input.email.trim().toLowerCase(),
+        contact: input.contact.trim(),
+      },
+    });
+    return toAuthenticatedUser(user);
+  } catch (error) {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+      throw new AppError(409, 'EMAIL_ALREADY_IN_USE', 'Another UVGo account already uses this email address.');
+    }
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2025') {
+      throw new AppError(404, 'PASSENGER_NOT_FOUND', 'This passenger profile is no longer available.');
+    }
+    throw error;
+  }
+}
+
+export async function changePassengerPassword(passengerId: string, currentPassword: string, newPassword: string) {
+  const user = await prisma.user.findUnique({ where: { id: passengerId } });
+  if (!user) throw new AppError(404, 'PASSENGER_NOT_FOUND', 'This passenger profile is no longer available.');
+  if (!(await compare(currentPassword, user.passwordHash))) {
+    throw new AppError(400, 'CURRENT_PASSWORD_INCORRECT', 'The current password you entered is incorrect.');
+  }
+
+  const passwordHash = await hash(newPassword, 12);
+  await prisma.user.update({
+    where: { id: passengerId },
+    data: { passwordHash, tokenVersion: { increment: 1 } },
+  });
 }

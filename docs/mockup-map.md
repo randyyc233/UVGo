@@ -36,6 +36,6 @@ This inventory is the visual contract for implementation. The supplied mockups c
 - Legazpi appears in public departure status and dispatcher/driver operations, but never has a reservation CTA.
 - Passenger views have no internal fleet GPS map.
 - Driver Trip Progress uses status/geofence milestones, not the continuous map depicted in the older sample.
-- Payment choices are exactly PayPal and “GCash — Upload Receipt for Verification.”
+- Payment choices include PayPal, “GCash — Upload Receipt for Verification,” and PayMongo dynamic QR Ph.
 - Dispatcher maps represent the fixed NCEBT 5 km Active Zone and current/recent operational state, not permanent location history.
 

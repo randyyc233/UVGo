@@ -14,10 +14,6 @@ export interface PublicDeparture {
     percent: number;
   };
   availableSeats: number | null;
-  status: {
-    code: 'incoming' | 'waiting' | 'loading' | 'ready' | 'departed' | 'delayed';
-    label: string;
-  };
   reservable: boolean;
 }
 

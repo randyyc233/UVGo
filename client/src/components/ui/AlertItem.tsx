@@ -9,6 +9,8 @@ interface AlertItemProps {
   timestamp?: string;
   tone?: StatusTone;
   className?: string;
+  action?: ReactNode;
+  read?: boolean;
 }
 
 const toneClasses: Record<StatusTone, string> = {
@@ -19,9 +21,9 @@ const toneClasses: Record<StatusTone, string> = {
   neutral: 'bg-cream text-text-secondary',
 };
 
-export function AlertItem({ icon, title, message, timestamp, tone = 'neutral', className }: AlertItemProps) {
+export function AlertItem({ icon, title, message, timestamp, tone = 'neutral', className, action, read = false }: AlertItemProps) {
   return (
-    <article className={cn('flex gap-3 border-b border-border py-3 last:border-b-0', className)}>
+    <article className={cn('flex gap-3 border-b border-border py-3 last:border-b-0', read && 'opacity-70', className)}>
       <span className={cn('flex h-9 w-9 shrink-0 items-center justify-center rounded-full', toneClasses[tone])}>
         {icon}
       </span>
@@ -31,6 +33,7 @@ export function AlertItem({ icon, title, message, timestamp, tone = 'neutral', c
           {timestamp ? <time className="shrink-0 text-xs text-text-muted">{timestamp}</time> : null}
         </div>
         <p className="mt-0.5 text-xs leading-5 text-text-secondary">{message}</p>
+        {action ? <div className="mt-2">{action}</div> : null}
       </div>
     </article>
   );

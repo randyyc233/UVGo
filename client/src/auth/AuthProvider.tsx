@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { apiRequest } from '../api/http';
-import type { AuthUser, LoginInput } from './authTypes';
+import type { AuthUser, EmailVerificationInput, LoginInput, PassengerSignupInput, PassengerSignupResult } from './authTypes';
 import { AuthContext } from './authContext';
 
 export function AuthProvider({ children }: { children: ReactNode }) {
@@ -46,6 +46,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return response.user;
   }, []);
 
+  const signupPassenger = useCallback(async (input: PassengerSignupInput) => {
+    return apiRequest<PassengerSignupResult>('/auth/register', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    });
+  }, []);
+
+  const verifyEmail = useCallback(async (input: EmailVerificationInput) => {
+    const response = await apiRequest<{ user: AuthUser }>('/auth/verification/confirm', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    });
+    setUser(response.user);
+    return response.user;
+  }, []);
+
   const logout = useCallback(async () => {
     try {
       await apiRequest<{ message: string }>('/auth/logout', { method: 'POST' });
@@ -54,7 +70,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  const value = useMemo(() => ({ user, loading, login, logout, refresh }), [loading, login, logout, refresh, user]);
+  const value = useMemo(
+    () => ({ user, loading, login, signupPassenger, verifyEmail, logout, refresh }),
+    [loading, login, logout, refresh, signupPassenger, user, verifyEmail],
+  );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

@@ -40,25 +40,21 @@ export async function createPayPalOrder(reference: string, amount: number) {
   }
 
   const accessToken = await getAccessToken();
+  // No `payment_source` block on purpose: the browser-side PayPal JS SDK supplies
+  // the payer experience for the popup flow. Setting experience_context.return_url
+  // here would make PayPal build the order for the redirect flow instead and the
+  // SDK's approval callback would not fire.
   const response = await fetch(`${env.PAYPAL_BASE_URL}/v2/checkout/orders`, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${accessToken}`,
       'Content-Type': 'application/json',
+      // Makes order creation idempotent for a given booking reference.
       'PayPal-Request-Id': reference,
     },
     body: JSON.stringify({
       intent: 'CAPTURE',
       purchase_units: [{ reference_id: reference, amount: { currency_code: 'PHP', value: amount.toFixed(2) } }],
-      payment_source: {
-        paypal: {
-          experience_context: {
-            user_action: 'PAY_NOW',
-            return_url: `${env.CLIENT_ORIGIN}/passenger/book?paypal=success&reference=${encodeURIComponent(reference)}`,
-            cancel_url: `${env.CLIENT_ORIGIN}/passenger/book?paypal=cancelled&reference=${encodeURIComponent(reference)}`,
-          },
-        },
-      },
     }),
   });
   if (!response.ok) throw new AppError(502, 'PAYPAL_ORDER_FAILED', 'PayPal could not create the sandbox order.');

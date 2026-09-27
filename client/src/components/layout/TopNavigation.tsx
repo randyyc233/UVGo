@@ -19,8 +19,8 @@ export function TopNavigation({ title, role, userName, terminal, notifications =
     .map((part) => part[0])
     .join('')
     .slice(0, 2);
-  const notificationsHref = role === 'passenger' ? '/passenger/notifications' : role === 'driver' ? '/driver/dashboard' : '/dispatcher/dashboard';
-  const profileHref = role === 'passenger' ? '/passenger/profile' : role === 'driver' ? '/driver/dashboard' : '/dispatcher/dashboard';
+  const notificationsHref = role === 'passenger' ? '/passenger/notifications' : role === 'driver' ? '/driver/notifications' : '/dispatcher/alerts';
+  const profileHref = role === 'passenger' ? '/passenger/profile' : role === 'driver' ? '/driver/profile' : '/dispatcher/profile';
 
   return (
     <header className="sticky top-0 z-20 border-b border-border bg-surface/95 backdrop-blur">

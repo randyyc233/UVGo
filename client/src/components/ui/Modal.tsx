@@ -17,6 +17,12 @@ interface ModalProps {
 export function Modal({ open, title, description, onClose, children, footer, className }: ModalProps) {
   const titleId = useId();
   const dialogRef = useRef<HTMLElement>(null);
+  const onCloseRef = useRef(onClose);
+
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
+
   useEffect(() => {
     if (!open) return undefined;
 
@@ -24,12 +30,12 @@ export function Modal({ open, title, description, onClose, children, footer, cla
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
     const frame = window.requestAnimationFrame(() => {
-      const firstFocusable = dialogRef.current?.querySelector<HTMLElement>('button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])');
+      const firstFocusable = dialogRef.current?.querySelector<HTMLElement>('input:not([disabled]), select:not([disabled]), textarea:not([disabled]), button:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])');
       (firstFocusable ?? dialogRef.current)?.focus();
     });
 
     function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === 'Escape') onClose();
+      if (event.key === 'Escape') onCloseRef.current();
       if (event.key !== 'Tab' || !dialogRef.current) return;
       const focusable = [...dialogRef.current.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])')];
       if (!focusable.length) { event.preventDefault(); dialogRef.current.focus(); return; }
@@ -46,7 +52,7 @@ export function Modal({ open, title, description, onClose, children, footer, cla
       document.body.style.overflow = previousOverflow;
       previousFocus?.focus();
     };
-  }, [onClose, open]);
+  }, [open]);
 
   if (!open) return null;
 

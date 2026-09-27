@@ -3,21 +3,35 @@ import type { Request, Response } from 'express';
 import { AppError } from '../utils/AppError.js';
 import {
   gcashReservationSchema,
+  passengerPasswordSchema,
+  passengerProfileSchema,
+  paymongoQrphReservationSchema,
+  paypalHostedReservationSchema,
   paypalReservationSchema,
   rescheduleSchema,
   tripSearchSchema,
 } from '../validators/passengerValidators.js';
 import {
   capturePaypalReservation,
+  changePassengerPassword,
   createGcashReservation,
+  createPaymongoQrphReservation,
+  createPaypalHostedReservation,
   createPaypalReservation,
+  deletePassengerNotification,
   getPassengerBooking,
   getPassengerBookings,
   getPassengerNotifications,
+  getPaymongoQrphCheckout,
   getTripSeats,
+  releasePaypalReservation,
+  markAllPassengerNotificationsRead,
+  markPassengerNotificationRead,
   reschedulePassengerBooking,
   searchGoaTrips,
+  updatePassengerProfile,
 } from '../services/passengerService.js';
+import { SESSION_COOKIE } from '../middleware/authMiddleware.js';
 
 function routeParameter(value: unknown) {
   if (typeof value !== 'string') throw new AppError(400, 'INVALID_ROUTE_PARAMETER', 'The requested resource identifier is invalid.');
@@ -44,6 +58,22 @@ export async function capturePaypal(request: Request, response: Response) {
   response.status(200).json({ booking });
 }
 
+export async function releasePaypal(request: Request, response: Response) {
+  const result = await releasePaypalReservation(request.auth!.userId, routeParameter(request.params.reference));
+  response.status(200).json(result);
+}
+
+/**
+ * Backs the dashboard-configured hosted button. No order is created here
+ * because PayPal owns that checkout entirely — the passenger reports the
+ * payment and a dispatcher verifies it, exactly like a GCash receipt.
+ */
+export async function createPaypalHosted(request: Request, response: Response) {
+  const input = paypalHostedReservationSchema.parse(request.body);
+  const booking = await createPaypalHostedReservation({ ...input, passengerId: request.auth!.userId });
+  response.status(201).json({ booking });
+}
+
 export async function createGcash(request: Request, response: Response) {
   if (!request.file) throw new AppError(422, 'RECEIPT_REQUIRED', 'Upload your GCash receipt before continuing.');
 
@@ -68,6 +98,17 @@ export async function createGcash(request: Request, response: Response) {
   }
 }
 
+export async function createPaymongoQrph(request: Request, response: Response) {
+  const input = paymongoQrphReservationSchema.parse(request.body);
+  const result = await createPaymongoQrphReservation({ ...input, passengerId: request.auth!.userId });
+  response.status(201).json(result);
+}
+
+export async function paymongoQrphCheckout(request: Request, response: Response) {
+  const result = await getPaymongoQrphCheckout(request.auth!.userId, routeParameter(request.params.reference));
+  response.status(200).json(result);
+}
+
 export async function bookings(request: Request, response: Response) {
   response.status(200).json({ bookings: await getPassengerBookings(request.auth!.userId) });
 }
@@ -84,4 +125,32 @@ export async function reschedule(request: Request, response: Response) {
 
 export async function notifications(request: Request, response: Response) {
   response.status(200).json({ notifications: await getPassengerNotifications(request.auth!.userId) });
+}
+
+export async function markNotificationRead(request: Request, response: Response) {
+  await markPassengerNotificationRead(request.auth!.userId, routeParameter(request.params.notificationId));
+  response.status(200).json({ message: 'Notification marked as read.' });
+}
+
+export async function markAllNotificationsRead(request: Request, response: Response) {
+  const updated = await markAllPassengerNotificationsRead(request.auth!.userId);
+  response.status(200).json({ message: 'All notifications marked as read.', updated });
+}
+
+export async function deleteNotification(request: Request, response: Response) {
+  await deletePassengerNotification(request.auth!.userId, routeParameter(request.params.notificationId));
+  response.status(204).send();
+}
+
+export async function updateProfile(request: Request, response: Response) {
+  const input = passengerProfileSchema.parse(request.body);
+  const user = await updatePassengerProfile(request.auth!.userId, input);
+  response.status(200).json({ user });
+}
+
+export async function changePassword(request: Request, response: Response) {
+  const input = passengerPasswordSchema.parse(request.body);
+  await changePassengerPassword(request.auth!.userId, input.currentPassword, input.newPassword);
+  response.clearCookie(SESSION_COOKIE, { path: '/' });
+  response.status(200).json({ message: 'Password changed successfully. Sign in again with your new password.' });
 }

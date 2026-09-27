@@ -1,14 +1,20 @@
 import {
+  AssignmentStatus,
   DispatchProtocol,
-  QueueStatus,
   ReservationStatus,
   RouteCode,
+  TripStatus,
   VehicleStatus,
 } from '@prisma/client';
+import { DEFAULT_GOA_FARE } from '../config/fare.js';
 import { NCEBT } from '../config/terminal.js';
+import { passengerCapacityOf } from '../config/vehicle.js';
 import { prisma } from '../lib/prisma.js';
+import { manilaServiceDay } from './driverSchedulePolicy.js';
+import { admitAcceptedGosoSchedulesForDay, operationalQueueStatuses } from './queueSchedulingService.js';
+import { selectTripForQueueRow } from './queueTripSelection.js';
 
-type PublicStatusCode = 'incoming' | 'waiting' | 'loading' | 'ready' | 'departed' | 'delayed';
+const activeTripStatuses = [TripStatus.SCHEDULED, TripStatus.ASSIGNING, TripStatus.ASSIGNED, TripStatus.BOARDING, TripStatus.READY, TripStatus.DELAYED];
 
 const routeNames: Record<RouteCode, 'Goa' | 'Legazpi'> = {
   GOA: 'Goa',
@@ -25,34 +31,30 @@ const destinationNames: Record<RouteCode, string> = {
   LEGAZPI: 'Legazpi Central Terminal',
 };
 
-function resolvePublicStatus(queueStatus: QueueStatus, vehicleStatus: VehicleStatus) {
-  if (queueStatus === QueueStatus.DEPARTED) return { code: 'departed' as const, label: 'Departed' };
-  if (queueStatus === QueueStatus.DELAYED || vehicleStatus === VehicleStatus.DELAYED) return { code: 'delayed' as const, label: 'Delayed' };
-  if (queueStatus === QueueStatus.READY_FOR_DISPATCH || vehicleStatus === VehicleStatus.READY_FOR_DISPATCH) {
-    return { code: 'ready' as const, label: 'Ready for Dispatch' };
-  }
-  if (vehicleStatus === VehicleStatus.INCOMING) return { code: 'incoming' as const, label: 'Incoming' };
-  if (vehicleStatus === VehicleStatus.AT_TERMINAL || vehicleStatus === VehicleStatus.LOADING) {
-    return { code: 'loading' as const, label: 'Loading' };
-  }
-  return { code: 'waiting' as const, label: 'Waiting' };
-}
-
 export async function getPublicDepartures() {
+  await admitAcceptedGosoSchedulesForDay();
+  const today = manilaServiceDay(new Date());
   const entries = await prisma.queueEntry.findMany({
     where: {
-      status: {
-        notIn: [QueueStatus.REJECTED, QueueStatus.REPLACED],
-      },
+      status: { in: operationalQueueStatuses },
+      vehicle: { status: { notIn: [VehicleStatus.ON_TRIP, VehicleStatus.UNAVAILABLE] } },
+      OR: [
+        { route: { not: RouteCode.GOA } },
+        { route: RouteCode.GOA, scheduledLoadingTime: { gte: today.start, lt: today.end } },
+      ],
     },
     orderBy: [{ route: 'asc' }, { position: 'asc' }],
     include: {
+      assignments: {
+        where: { status: { in: [AssignmentStatus.PENDING, AssignmentStatus.ACCEPTED] } },
+        orderBy: { assignedAt: 'desc' },
+        select: { tripId: true },
+      },
       vehicle: {
         include: {
           trips: {
-            where: { status: { notIn: ['COMPLETED', 'UNABLE_TO_DEPART'] } },
+            where: { status: { in: activeTripStatuses }, departedAt: null },
             orderBy: { scheduledOrTriggeredTime: 'asc' },
-            take: 1,
             include: {
               passengerCounts: {
                 orderBy: { timestamp: 'desc' },
@@ -69,14 +71,16 @@ export async function getPublicDepartures() {
     },
   });
 
+  const routePositions = new Map<RouteCode, number>();
   const departures = entries.map((entry) => {
-    const trip = entry.vehicle.trips[0] ?? null;
+    const trip = selectTripForQueueRow(entry.scheduledLoadingTime, entry.assignments, entry.vehicle.trips);
+    const capacity = passengerCapacityOf(entry.vehicle);
     const submittedOccupancy = trip?.passengerCounts[0]?.count;
     const reservedOccupancy = trip?.reservations.reduce((total, reservation) => total + reservation.seatCount, 0) ?? 0;
-    const occupancy = Math.min(entry.vehicle.capacity, submittedOccupancy ?? reservedOccupancy);
+    const occupancy = Math.min(capacity, submittedOccupancy ?? reservedOccupancy);
     const reservable = entry.route === RouteCode.GOA;
-    const status = resolvePublicStatus(entry.status, entry.vehicle.status);
-
+    const routePosition = (routePositions.get(entry.route) ?? 0) + 1;
+    routePositions.set(entry.route, routePosition);
     return {
       id: entry.id,
       route: routeNames[entry.route],
@@ -85,15 +89,16 @@ export async function getPublicDepartures() {
       destination: destinationNames[entry.route],
       vanId: entry.vehicle.vanId,
       protocol: protocolNames[entry.vehicle.protocol],
-      departureTime: trip?.scheduledOrTriggeredTime.toISOString() ?? null,
-      queuePosition: entry.position,
+      // Taya has no public fixed departure schedule; its actual departure is
+      // determined by the existing occupancy and dispatch rules.
+      departureTime: entry.route === RouteCode.GOA ? trip?.scheduledOrTriggeredTime.toISOString() ?? null : null,
+      queuePosition: entry.route === RouteCode.GOA ? routePosition : entry.position,
       occupancy: {
         count: occupancy,
-        capacity: entry.vehicle.capacity,
-        percent: Math.round((occupancy / entry.vehicle.capacity) * 100),
+        capacity,
+        percent: Math.round((occupancy / capacity) * 100),
       },
-      availableSeats: reservable ? Math.max(0, entry.vehicle.capacity - occupancy) : null,
-      status: status as { code: PublicStatusCode; label: string },
+      availableSeats: reservable ? Math.max(0, capacity - occupancy) : null,
       reservable,
     };
   });
@@ -111,7 +116,8 @@ export async function getPublicDepartures() {
 export async function getPublicRoutes() {
   const nextTrips = await prisma.trip.findMany({
     where: {
-      status: { notIn: ['COMPLETED', 'UNABLE_TO_DEPART'] },
+      status: { in: activeTripStatuses },
+      departedAt: null,
     },
     distinct: ['route'],
     orderBy: { scheduledOrTriggeredTime: 'asc' },
@@ -129,7 +135,7 @@ export async function getPublicRoutes() {
         destination: destinationNames.GOA,
         protocol: 'Goso',
         reservable: true,
-        fare: 190,
+        fare: DEFAULT_GOA_FARE,
         nextDeparture: nextDepartureByRoute.get(RouteCode.GOA) ?? null,
         summary: 'Scheduled departures with advance seat reservations.',
       },
@@ -140,10 +146,9 @@ export async function getPublicRoutes() {
         protocol: 'Taya',
         reservable: false,
         fare: null,
-        nextDeparture: nextDepartureByRoute.get(RouteCode.LEGAZPI) ?? null,
-        summary: 'Status-only service that departs when the van reaches full occupancy.',
+        nextDeparture: null,
+        summary: 'Departs when the van reaches full occupancy. No online reservations.',
       },
     ],
   };
 }
-

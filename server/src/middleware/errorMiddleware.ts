@@ -15,11 +15,17 @@ export const notFoundHandler: RequestHandler = (_request, response) => {
 export const errorHandler: ErrorRequestHandler = (error: unknown, _request, response, _next) => {
   void _next;
   if (error instanceof ZodError) {
+    const fieldErrors = error.issues.reduce<Record<string, string[]>>((details, issue) => {
+      const field = issue.path.join('.') || '_form';
+      details[field] = [...(details[field] ?? []), issue.message];
+      return details;
+    }, {});
+
     response.status(422).json({
       error: {
         code: 'VALIDATION_ERROR',
         message: 'Please correct the highlighted information.',
-        details: error.flatten().fieldErrors,
+        details: fieldErrors,
       },
     });
     return;

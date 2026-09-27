@@ -9,7 +9,7 @@ All ten delivery phases are complete. The implementation follows the supplied mo
 - Client: React 19, TypeScript, Vite, React Router, Tailwind CSS, Lucide icons, Mapbox GL JS
 - Server: Node.js, Express 5, TypeScript, Zod, JWT cookie sessions, Helmet, rate limiting, Multer
 - Data: MySQL 8.4 and Prisma 6
-- Payments: PayPal Sandbox integration with a local demo fallback, plus GCash receipt upload and dispatcher verification
+- Payments: GCash-only passenger checkout using receipt upload and dispatcher verification, with legacy PayPal records retained for compatibility
 - Quality: TypeScript, ESLint, Node test runner through `tsx`, production builds, and rendered browser QA
 
 ## Architecture
@@ -49,7 +49,6 @@ capstone/
 |   |   `-- validators/             Zod request schemas
 |   `-- tests/                      Critical business-rule integration tests
 |-- docs/                           Feature and operations documentation
-|-- docker-compose.yml              Local MySQL service
 |-- package.json                    Workspace commands
 `-- README.md
 ```
@@ -58,7 +57,7 @@ capstone/
 
 - Node.js 20.19 or newer
 - npm 10 or newer
-- Docker Desktop, or a separately installed MySQL 8 server
+- MySQL 8 or MariaDB 10.4+ (XAMPP is supported for local development)
 - A Mapbox public access token for dispatcher maps
 
 ## Environment variables
@@ -80,6 +79,10 @@ Backend variables:
 | `DATABASE_URL` | Prisma MySQL connection URL |
 | `JWT_SECRET` | Session signing secret of at least 32 characters |
 | `JWT_EXPIRES_IN` | Session lifetime |
+| `GMAIL_USER` | Gmail or Google Workspace address used to send verification and password-reset codes |
+| `GMAIL_APP_PASSWORD` | Google App Password for SMTP; never use the account's normal password |
+| `EMAIL_FROM_NAME` | Sender display name; defaults to `UVGo` |
+| `EMAIL_CODE_TTL_MINUTES` | Verification/reset code lifetime; defaults to 10 minutes |
 | `PAYPAL_CLIENT_ID` | Optional PayPal Sandbox client ID |
 | `PAYPAL_CLIENT_SECRET` | Optional PayPal Sandbox secret |
 | `PAYPAL_BASE_URL` | PayPal Sandbox API base URL |
@@ -94,17 +97,25 @@ Frontend variables:
 | `VITE_API_BASE_URL` | API base; `/api` is used with the Vite proxy |
 | `VITE_MAPBOX_ACCESS_TOKEN` | Public Mapbox token used only in the client map |
 
-Never commit real PayPal secrets, JWT secrets, or uploaded receipts.
+For Gmail SMTP, enable 2-Step Verification on the sending Google account, open [Google App Passwords](https://myaccount.google.com/apppasswords), and generate a 16-character password for UVGo. Put that generated value in `server/.env` (spaces are optional), restart the server, and request a fresh verification code. Do not use the account's normal password. If Google does not show the App Passwords page, the account may be organization-managed, enrolled in Advanced Protection, or configured for security keys only. Never commit Gmail credentials, real PayPal secrets, JWT secrets, or uploaded receipts.
 
 ## MySQL and Prisma setup
 
-Start the provided MySQL container:
+Start your locally installed MySQL or MariaDB server. For XAMPP on Windows, start **MySQL** from the XAMPP Control Panel, then create the local database and account:
 
-```bash
-docker compose up -d mysql
+```powershell
+C:\xampp\mysql\bin\mysql.exe -u root
 ```
 
-The container exposes MySQL at `localhost:3307` to avoid conflicts with a local port 3306 installation.
+```sql
+CREATE DATABASE uvgo CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE USER IF NOT EXISTS 'uvgo'@'localhost' IDENTIFIED BY 'uvgo_dev_password';
+GRANT ALL PRIVILEGES ON uvgo.* TO 'uvgo'@'localhost';
+FLUSH PRIVILEGES;
+EXIT;
+```
+
+The example `DATABASE_URL` connects to the local database on the standard port `3306`. Change its username, password, host, or port if your installation uses different values.
 
 Generate Prisma Client, apply the committed migrations, and seed the demonstration dataset:
 
@@ -155,15 +166,18 @@ All demo accounts use password `UVGoDemo123!`.
 
 | Role | Email |
 | --- | --- |
-| Dispatcher | `dispatcher@uvgo.demo` |
+| Goa Dispatcher | `dispatcher@uvgo.demo` |
+| Legazpi Dispatcher | `dispatcher.legazpi@uvgo.demo` |
 | Driver | `driver.rodel@uvgo.demo` |
 | Passenger | `passenger@uvgo.demo` |
 
 Additional seeded people and vehicles support FIFO, reassignment, payment-verification, and occupancy demonstrations.
 
+The seeded `@uvgo.demo` addresses are intentionally non-routable. In development, verification and password-reset codes for those demo accounts are displayed in the app instead of being sent through Gmail. Real Passenger, Driver, and Dispatcher email addresses use the configured Gmail delivery service; production never displays a code.
+
 ## Simulation controls
 
-Sign in as the dispatcher and open **More** to access demo-only operational controls:
+Sign in as either route dispatcher and open **More** to access demo-only operational controls scoped to that dispatcher’s assigned route:
 
 - **Simulate entry** moves seeded `VAN-005` into the NCEBT 5 km Active Zone through the real geofence service.
 - **Run dispatch engine** immediately evaluates assignment expiry, Goso timing, and Taya readiness.
@@ -171,9 +185,11 @@ Sign in as the dispatcher and open **More** to access demo-only operational cont
 
 Every simulation is written to the dispatch audit log. See [docs/demo-runbook.md](docs/demo-runbook.md) for a guided presentation sequence.
 
-## PayPal Sandbox setup
+## Legacy PayPal compatibility
 
-Set `PAYPAL_CLIENT_ID` and `PAYPAL_CLIENT_SECRET` in `server/.env` using credentials from a PayPal Sandbox application. Keep `PAYPAL_BASE_URL=https://api-m.sandbox.paypal.com`.
+PayPal is not offered for new passenger bookings. Its service, environment variables, and captured demo record remain for historical compatibility and regression coverage.
+
+If the legacy Sandbox path must be exercised, set `PAYPAL_CLIENT_ID` and `PAYPAL_CLIENT_SECRET` in `server/.env` using credentials from a PayPal Sandbox application. Keep `PAYPAL_BASE_URL=https://api-m.sandbox.paypal.com`.
 
 When credentials are configured, UVGo creates and captures real Sandbox orders. With blank credentials and `DEMO_MODE=true`, it creates a local `DEMO-*` order and completes capture locally so the full booking state transition remains demonstrable. Production mode never falls back to demo capture.
 
@@ -181,7 +197,7 @@ When credentials are configured, UVGo creates and captures real Sandbox orders. 
 
 GCash is intentionally a manual verification flow:
 
-1. The passenger selects GCash and uploads an image receipt.
+1. The passenger uploads an image receipt for the GCash-only checkout.
 2. The server validates and stores the file outside the public client directory.
 3. The booking and payment enter `PendingVerification`.
 4. A dispatcher reviews the receipt under **Payments** and approves or rejects it.
@@ -212,7 +228,7 @@ npm run build
 npm run demo:reset
 ```
 
-`npm test` runs all 14 critical business-rule tests named in the specification against MySQL and restores the demo baseline afterward. The coverage inventory is documented in [docs/test-and-release.md](docs/test-and-release.md).
+`npm test` runs all 21 critical business-rule tests against MySQL and restores the demo baseline afterward. The coverage inventory is documented in [docs/test-and-release.md](docs/test-and-release.md).
 
 ## Documentation
 
@@ -233,10 +249,12 @@ npm run demo:reset
 - This is a single-terminal capstone prototype, not a multi-tenant production dispatch platform.
 - Dispatcher maps show the current operational snapshot; permanent detailed location history is intentionally excluded.
 - Driver location transitions are submitted events, not continuous background mobile GPS tracking.
-- PayPal requires Sandbox credentials for external approval; demo mode supplies a clearly isolated local fallback.
+- Legacy PayPal regression coverage requires Sandbox credentials for external approval; demo mode supplies a clearly isolated local fallback.
 - GCash verification is manual and receipt images use local disk storage.
-- Notifications are in-app records; push notifications, SMS, and email delivery are outside scope.
+- Booking and dispatch notifications remain in-app records; email delivery is limited to account verification and password recovery.
 - The application uses seeded Philippine routes and fares and does not include an administrator role.
 - The dispatcher map chunk is intentionally substantial because Mapbox is loaded for that role; it is lazy-loaded away from public, passenger, and driver routes.
 #   U V G o  
+ 
+#   U V G  
  

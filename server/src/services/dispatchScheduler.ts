@@ -1,5 +1,6 @@
 import { env } from '../config/env.js';
 import { runDispatchEngine } from './automationService.js';
+import { materializeWeeklySchedules } from './weeklyScheduleService.js';
 
 export function startDispatchScheduler() {
   let running = false;
@@ -7,6 +8,7 @@ export function startDispatchScheduler() {
     if (running) return;
     running = true;
     try {
+      await materializeWeeklySchedules();
       await runDispatchEngine();
     } catch (error) {
       console.error('Dispatch engine tick failed:', error instanceof Error ? error.message : 'Unknown error');

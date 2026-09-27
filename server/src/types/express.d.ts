@@ -1,4 +1,4 @@
-import type { UserRole } from '@prisma/client';
+import type { RouteCode, UserRole } from '@prisma/client';
 
 declare global {
   namespace Express {
@@ -8,6 +8,7 @@ declare global {
         role: UserRole;
         name: string;
         email: string;
+        dispatcherRoute: RouteCode | null;
       };
     }
   }

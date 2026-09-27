@@ -1,6 +1,7 @@
 node_modules/
 dist/
 coverage/
+*.tsbuildinfo
 .env
 .env.*
 !.env.example
@@ -8,6 +9,10 @@ coverage/
 .DS_Store
 .idea/
 .vscode/
+.codex-artifacts/
+.codex-tools/
+.playwright-cli/
+.workbuddy-ai/
 server/uploads/
 server/prisma/*.db
 

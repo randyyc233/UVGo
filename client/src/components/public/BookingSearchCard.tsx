@@ -1,17 +1,18 @@
 import { useState, type FormEvent } from 'react';
 import { ArrowRight, CalendarDays, MapPin, UsersRound } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { Button, Select } from '../ui';
+import { Button, Input, Select } from '../ui';
 
-function todayForInput() {
-  const today = new Date();
-  const timezoneOffset = today.getTimezoneOffset() * 60_000;
-  return new Date(today.getTime() - timezoneOffset).toISOString().slice(0, 10);
+function tomorrowForInput() {
+  const tomorrow = new Date();
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  const timezoneOffset = tomorrow.getTimezoneOffset() * 60_000;
+  return new Date(tomorrow.getTime() - timezoneOffset).toISOString().slice(0, 10);
 }
 
 export function BookingSearchCard() {
   const navigate = useNavigate();
-  const [departureDate, setDepartureDate] = useState(todayForInput());
+  const [departureDate, setDepartureDate] = useState(tomorrowForInput());
   const [passengers, setPassengers] = useState('1');
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -33,37 +34,32 @@ export function BookingSearchCard() {
         </div>
         <span className="rounded-pill bg-primary-soft px-3 py-1 text-xs font-semibold text-primary">Goa only</span>
       </div>
-      <div className="grid gap-3 lg:grid-cols-[1fr_auto_1fr_0.85fr_0.72fr_auto] lg:items-end">
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-[1fr_auto_1fr_0.85fr_0.72fr_auto] lg:items-end">
         <div>
-          <p className="mb-1.5 text-xs font-semibold text-text-secondary">From</p>
-          <div className="flex min-h-touch items-center gap-2 rounded-control border border-border-strong bg-surface px-3 text-sm font-medium">
-            <MapPin className="h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
+          <p className="mb-1.5 text-sm font-semibold text-text-primary">From</p>
+          <div className="flex min-h-touch items-center gap-2 rounded-control border border-border-strong bg-surface px-3 text-sm font-medium shadow-sm">
+            <MapPin className="h-4 w-4 shrink-0 text-text-secondary" aria-hidden="true" />
             <span className="truncate">Naga City East Bound Terminal</span>
           </div>
         </div>
-        <ArrowRight className="mx-1 hidden h-5 w-5 text-text-muted lg:block" aria-hidden="true" />
+        <ArrowRight className="mx-1 mb-3 hidden h-5 w-5 text-text-muted lg:block" aria-hidden="true" />
         <div>
-          <p className="mb-1.5 text-xs font-semibold text-text-secondary">To</p>
-          <div className="flex min-h-touch items-center gap-2 rounded-control border border-border-strong bg-surface px-3 text-sm font-medium">
-            <MapPin className="h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
+          <p className="mb-1.5 text-sm font-semibold text-text-primary">To</p>
+          <div className="flex min-h-touch items-center gap-2 rounded-control border border-border-strong bg-surface px-3 text-sm font-medium shadow-sm">
+            <MapPin className="h-4 w-4 shrink-0 text-text-secondary" aria-hidden="true" />
             <span>Goa Terminal</span>
           </div>
         </div>
-        <div>
-          <label htmlFor="public-departure-date" className="mb-1.5 block text-xs font-semibold text-text-secondary">Departure date</label>
-          <div className="relative">
-            <CalendarDays className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-primary" aria-hidden="true" />
-            <input
-              id="public-departure-date"
-              type="date"
-              min={todayForInput()}
-              value={departureDate}
-              onChange={(event) => setDepartureDate(event.target.value)}
-              className="min-h-touch w-full rounded-control border border-border-strong bg-surface py-2 pl-10 pr-3 text-sm text-text-primary"
-              required
-            />
-          </div>
-        </div>
+        <Input
+          id="public-departure-date"
+          label="Departure date"
+          type="date"
+          min={tomorrowForInput()}
+          value={departureDate}
+          onChange={(event) => setDepartureDate(event.target.value)}
+          leadingIcon={<CalendarDays className="h-4 w-4" />}
+          required
+        />
         <Select
           label="Passengers"
           aria-label="Passengers"
@@ -76,7 +72,7 @@ export function BookingSearchCard() {
           <option value="3">3 Passengers</option>
           <option value="4">4 Passengers</option>
         </Select>
-        <Button type="submit" size="lg" className="lg:min-w-44" trailingIcon={<ArrowRight className="h-4 w-4" />}>
+        <Button type="submit" size="lg" className="sm:col-span-2 lg:col-span-1 lg:min-w-44" trailingIcon={<ArrowRight className="h-4 w-4" />}>
           Search trips
         </Button>
       </div>

@@ -9,7 +9,6 @@ import {
   Clock3,
   MapPin,
   Search,
-  ShieldCheck,
   UsersRound,
   WalletCards,
 } from 'lucide-react';
@@ -92,20 +91,12 @@ function DriverPreview() {
             </div>
           </div>
         </Card>
-        <Card>
-          <div className="flex items-center justify-between gap-4">
-            <div>
-              <p className="font-semibold">Go on Trip</p>
-              <p className="mt-1 text-xs text-text-secondary">Enable terminal queue participation.</p>
-            </div>
-            <Toggle checked={goOnTrip} onChange={setGoOnTrip} label="Go on Trip" />
-          </div>
-        </Card>
+        <Card><div className="flex items-center justify-between gap-4"><div><p className="font-semibold">Go on Trip</p><p className="mt-1 text-xs text-text-secondary">Stays on until the driver turns it off.</p></div><Toggle checked={goOnTrip} onChange={setGoOnTrip} label="Go on Trip" /></div></Card>
       </div>
       <Card elevated>
         <CardHeader title="Recent alerts" />
-        <AlertItem icon={<BellRing className="h-4 w-4" />} title="Be ready for dispatch" message="Your assignment response window will open shortly." timestamp="9:28 AM" tone="warning" />
-        <AlertItem icon={<UsersRound className="h-4 w-4" />} title="Passenger count updated" message="Occupancy is now 12 of 15 seats." timestamp="9:15 AM" tone="info" />
+        <AlertItem icon={<BellRing className="h-4 w-4" />} title="Be ready for dispatch" message="Your queue assignment is active. Cancel it if you cannot make the trip." timestamp="9:28 AM" tone="warning" />
+        <AlertItem icon={<UsersRound className="h-4 w-4" />} title="Passenger count updated" message="Occupancy is now 11 of 11 passenger seats." timestamp="9:15 AM" tone="info" />
         <AlertItem icon={<CheckCircle2 className="h-4 w-4" />} title="Reservation list synced" message="Confirmed passenger manifest is available." timestamp="9:02 AM" tone="success" />
       </Card>
     </div>
@@ -134,9 +125,9 @@ function DispatcherPreview() {
           onChange={setRoute}
         />
         <div className="mt-4 space-y-2">
-          <QueueRow position={1} vanId="VAN-033" driver="Rodel Reyes" arrival="09:35 AM" occupancy="16/17" status="Ready" statusTone="success" />
-          <QueueRow position={2} vanId="VAN-021" driver="Mario Bautista" arrival="09:40 AM" occupancy="12/15" status="Incoming" statusTone="info" />
-          <QueueRow position={3} vanId="VAN-019" driver="Pedro Enriquez" arrival="09:50 AM" occupancy="10/15" status="Delayed" statusTone="danger" />
+          <QueueRow position={1} vanId="VAN-033" driver="Rodel Reyes" arrival="9:35 AM" occupancy="11/11" status="Ready" statusTone="success" />
+          <QueueRow position={2} vanId="VAN-021" driver="Mario Bautista" arrival="9:40 AM" occupancy="8/11" status="Incoming" statusTone="info" />
+          <QueueRow position={3} vanId="VAN-019" driver="Pedro Enriquez" arrival="9:50 AM" occupancy="10/11" status="Delayed" statusTone="danger" />
         </div>
       </Card>
     </div>
@@ -181,12 +172,7 @@ export function RoleFoundationPage({ role }: RoleFoundationPageProps) {
         confirmLabel="Looks good"
         onClose={() => setDialogOpen(false)}
         onConfirm={() => setDialogOpen(false)}
-      >
-        <div className="flex gap-3 rounded-control bg-primary-soft p-3 text-sm text-primary-dark">
-          <ShieldCheck className="h-5 w-5 shrink-0" aria-hidden="true" />
-          Destructive dispatcher overrides will require a reason when that workflow is implemented.
-        </div>
-      </ConfirmationDialog>
+      />
     </>
   );
 }

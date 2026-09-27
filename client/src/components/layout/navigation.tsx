@@ -2,7 +2,7 @@ import type { LucideIcon } from 'lucide-react';
 import {
   Bell,
   BellRing,
-  BusFront,
+  CalendarClock,
   CircleHelp,
   ClipboardCheck,
   FileClock,
@@ -14,6 +14,7 @@ import {
   Settings,
   TicketCheck,
   UserRound,
+  UserRoundCog,
   UsersRound,
   WalletCards,
 } from 'lucide-react';
@@ -29,29 +30,31 @@ export interface NavigationItem {
 
 export const passengerNavigation: NavigationItem[] = [
   { label: 'Home', href: '/passenger/home', icon: House },
-  { label: 'Bookings', href: '/passenger/bookings', icon: TicketCheck },
-  { label: 'Status', href: '/passenger/status', icon: Route },
+  { label: 'My Bookings', href: '/passenger/bookings', icon: TicketCheck },
   { label: 'Notifications', href: '/passenger/notifications', icon: Bell },
   { label: 'Profile', href: '/passenger/profile', icon: UserRound },
 ];
 
 export const driverNavigation: NavigationItem[] = [
   { label: 'Dashboard', href: '/driver/dashboard', icon: LayoutDashboard },
+  { label: 'Notifications', href: '/driver/notifications', icon: Bell },
   { label: 'Queue', href: '/driver/queue', icon: UsersRound },
-  { label: 'Assignment', href: '/driver/assignment', icon: ClipboardCheck },
+  { label: 'Assignments', href: '/driver/assignment', icon: ClipboardCheck },
   { label: 'Trip', href: '/driver/trip', icon: Route },
   { label: 'Driver setup', href: '/driver/setup', icon: Settings },
+  { label: 'Profile', href: '/driver/profile', icon: UserRound },
 ];
 
 export const dispatcherNavigation: NavigationItem[] = [
   { label: 'Dashboard', href: '/dispatcher/dashboard', icon: LayoutDashboard },
+  { label: 'Schedules', href: '/dispatcher/schedules', icon: CalendarClock },
+  { label: 'Drivers & Vehicles', href: '/dispatcher/drivers', icon: UserRoundCog },
   { label: 'Fleet Map', href: '/dispatcher/fleet', icon: MapPinned },
   { label: 'Queue Management', href: '/dispatcher/queue', icon: ListOrdered },
-  { label: 'Dispatch Board', href: '/dispatcher/dispatch', icon: BusFront },
   { label: 'Payments', href: '/dispatcher/payments', icon: WalletCards },
-  { label: 'Alerts', href: '/dispatcher/alerts', icon: BellRing, badge: 3 },
+  { label: 'Alerts', href: '/dispatcher/alerts', icon: BellRing },
   { label: 'Reports & Logs', href: '/dispatcher/logs', icon: FileClock },
-  { label: 'Settings', href: '/dispatcher/settings', icon: Settings },
+  { label: 'Profile', href: '/dispatcher/profile', icon: UserRound },
 ];
 
 export const roleNavigation: Record<AppRole, NavigationItem[]> = {

@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from 'react';
 import { Bell, Menu, UserRound } from 'lucide-react';
 import { NavLink } from 'react-router-dom';
+import { useAuth } from '../../auth/authContext';
 import { Logo } from '../brand/Logo';
 import { IconButton } from '../ui/IconButton';
 import { cn } from '../../lib/cn';
@@ -10,15 +11,24 @@ interface PublicShellProps {
 }
 
 const links = [
-  { label: 'Home', href: '#top' },
-  { label: 'Routes', href: '#routes' },
+  { label: 'Home', href: '/#top' },
+  { label: 'Routes', href: '/#routes' },
   { label: 'Book', href: '/passenger/book' },
-  { label: 'Departures', href: '#departures' },
-  { label: 'Help', href: '#why-uvgo' },
+  { label: 'Departures', href: '/#departures' },
+  { label: 'Help', href: '/#why-uvgo' },
 ];
 
 export function PublicShell({ children }: PublicShellProps) {
+  const { user } = useAuth();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const accountPath = user?.role === 'passenger'
+    ? '/passenger/profile'
+    : user?.role === 'driver'
+      ? '/driver/profile'
+      : user?.role === 'dispatcher'
+        ? '/dispatcher/profile'
+        : '/login';
+  const notificationsPath = user?.role === 'passenger' ? '/passenger/notifications' : accountPath;
 
   return (
     <div className="min-h-screen bg-background text-text-primary">
@@ -34,7 +44,7 @@ export function PublicShell({ children }: PublicShellProps) {
               onClick={() => setMobileMenuOpen((open) => !open)}
             />
           </div>
-          <a href="#top" className="absolute left-1/2 -translate-x-1/2 lg:static lg:translate-x-0" aria-label="UVGo home"><Logo /></a>
+          <a href="/#top" className="absolute left-1/2 -translate-x-1/2 lg:static lg:translate-x-0" aria-label="UVGo home"><Logo /></a>
           <nav className="hidden items-stretch self-stretch lg:flex" aria-label="Public navigation">
             {links.map((link) => (
               <a
@@ -47,8 +57,8 @@ export function PublicShell({ children }: PublicShellProps) {
             ))}
           </nav>
           <div className="flex items-center gap-1 sm:gap-2">
-            <NavLink to="/login" aria-label="Sign in to view notifications" className="hidden min-h-touch min-w-touch items-center justify-center rounded-full text-text-secondary hover:bg-cream hover:text-text-primary sm:inline-flex"><Bell className="h-5 w-5" /></NavLink>
-            <NavLink to="/login" aria-label="Account" className="inline-flex min-h-touch min-w-touch items-center justify-center rounded-full text-text-secondary hover:bg-cream hover:text-text-primary"><UserRound className="h-5 w-5" /></NavLink>
+            <NavLink to={notificationsPath} aria-label={user?.role === 'passenger' ? 'View notifications' : user ? 'Open dashboard' : 'Sign in to view notifications'} className="hidden min-h-touch min-w-touch items-center justify-center rounded-full text-text-secondary hover:bg-cream hover:text-text-primary sm:inline-flex"><Bell className="h-5 w-5" /></NavLink>
+            <NavLink to={accountPath} aria-label={user ? `${user.name} account` : 'Sign in'} className="inline-flex min-h-touch min-w-touch items-center justify-center rounded-full text-text-secondary hover:bg-cream hover:text-text-primary"><UserRound className="h-5 w-5" /></NavLink>
             <NavLink to="/passenger/book" className="hidden min-h-touch items-center rounded-control bg-primary px-4 text-sm font-semibold text-text-inverse hover:bg-primary-dark lg:inline-flex">Book a Ride</NavLink>
           </div>
         </div>

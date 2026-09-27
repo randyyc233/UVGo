@@ -1,0 +1,32 @@
+import 'dotenv/config';
+import { PrismaClient } from '@prisma/client';
+import { spawnSync } from 'node:child_process';
+import process from 'node:process';
+import { URL } from 'node:url';
+
+// Never seed/reset the application's database to run regression tests.
+const databaseName = `test_uvgo_${Date.now()}_${process.pid}`;
+const testDemoMode = process.env.UVGO_TEST_DEMO_MODE ?? 'true';
+if (!['true', 'false'].includes(testDemoMode)) throw new Error('UVGO_TEST_DEMO_MODE must be true or false.');
+const applicationUrl = new URL(process.env.DATABASE_URL);
+const testUrl = new URL(applicationUrl);
+testUrl.pathname = `/${databaseName}`;
+if (!/^test_uvgo_[0-9]+_[0-9]+$/.test(databaseName) || testUrl.pathname === applicationUrl.pathname) throw new Error('Invalid isolated test database.');
+const admin = new PrismaClient();
+let created = false;
+try {
+  await admin.$executeRawUnsafe(`CREATE DATABASE \`${databaseName}\``);
+  created = true;
+  const env = { ...process.env, DATABASE_URL: testUrl.toString(), NODE_ENV: 'test', DEMO_MODE: testDemoMode, UVGO_ISOLATED_TEST_DATABASE: databaseName };
+  // Resolve workspace-hoisted packages without depending on shell execution.
+  const { createRequire } = await import('node:module');
+  const require = createRequire(import.meta.url);
+  const migrate = spawnSync(process.execPath, [require.resolve('prisma/build/index.js'), 'migrate', 'deploy'], { env, stdio: 'inherit' });
+  if (migrate.status !== 0) throw new Error('Isolated test migration failed.');
+  const result = spawnSync(process.execPath, [require.resolve('tsx/cli'), '--test', '--test-concurrency=1', ...process.argv.slice(2), 'tests/critical-business-rules.test.ts'], { env, stdio: 'inherit' });
+  process.exitCode = result.status ?? 1;
+} finally {
+  // This exact database was created above by this run and contains test fixtures only.
+  if (created) await admin.$executeRawUnsafe(`DROP DATABASE \`${databaseName}\``);
+  await admin.$disconnect();
+}

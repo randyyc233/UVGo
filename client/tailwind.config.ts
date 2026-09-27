@@ -43,8 +43,11 @@ export default {
           soft: '#EAF2FF',
         },
         unavailable: '#D9DCDA',
+        // Merchant-supplied PayPal single-button brand colors.
+        paypal: { gold: '#FFD140', ink: '#000000' },
       },
       fontFamily: {
+        paypal: ['Helvetica Neue', 'Arial', 'sans-serif'],
         sans: ['Inter', 'ui-sans-serif', 'system-ui', '-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'sans-serif'],
       },
       borderRadius: {
