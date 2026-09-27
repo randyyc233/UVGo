@@ -37,6 +37,10 @@ COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/client/dist ./client/dist
 COPY --from=build /app/server/dist ./server/dist
 COPY --from=build /app/server/prisma ./server/prisma
+# Prisma's TypeScript seed imports shared fare and vehicle configuration from
+# server/src. Keep the source tree in the runtime image so `prisma db seed`
+# remains available from the Coolify container terminal.
+COPY --from=build /app/server/src ./server/src
 
 RUN mkdir -p /app/uploads/receipts && chown -R node:node /app
 
