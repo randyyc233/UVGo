@@ -582,6 +582,61 @@ test('4c. a prior-day Taya trip cannot block today\'s saved queue sequence', asy
   assert.equal((await getDispatcherQueue(RouteCode.LEGAZPI)).entries.some((entry) => entry.vanId === 'VAN-005'), true);
 });
 
+test('4ca. Taya displays only today\'s queue while preserving yesterday\'s queue records unchanged', async () => {
+  const now = new Date();
+  const serviceDay = manilaServiceDay(now);
+  const serviceDate = new Date(`${serviceDay.date}T00:00:00.000Z`);
+  const yesterdayDate = new Date(serviceDate.getTime() - 24 * 60 * 60_000);
+  const yesterdayTime = new Date(serviceDay.start.getTime() - 60 * 60_000);
+  const historicalQueueIds = ['seed_queue_legazpi_1', 'seed_queue_legazpi_2'];
+
+  // Simulate crossing midnight with yesterday's operational rows still active.
+  // The dated daily plans own those rows, so the records do not need to be
+  // closed, deleted, or rewritten merely to remove them from today's view.
+  await prisma.tayaDailySchedule.updateMany({
+    where: { serviceDate },
+    data: { serviceDate: yesterdayDate },
+  });
+  await prisma.trip.update({
+    where: { id: 'seed_trip_legazpi_loading' },
+    data: { scheduledOrTriggeredTime: yesterdayTime, boardingStartTime: yesterdayTime },
+  });
+  const before = await prisma.queueEntry.findMany({
+    where: { id: { in: historicalQueueIds } },
+    orderBy: { id: 'asc' },
+    select: { id: true, position: true, status: true, arrivalTimestamp: true, lateAt: true, createdAt: true, updatedAt: true },
+  });
+  const oldAssignmentBefore = await prisma.tripAssignment.findUniqueOrThrow({
+    where: { id: 'seed_assignment_legazpi' },
+    select: { status: true, queueEntryId: true, respondedAt: true },
+  });
+
+  const queue = await getDispatcherQueue(RouteCode.LEGAZPI);
+
+  assert.equal(queue.entries.some((entry) => historicalQueueIds.includes(entry.id)), false);
+  assert.deepEqual(queue.entries.map((entry) => entry.vanId), ['VAN-019', 'VAN-005']);
+  assert.deepEqual(queue.entries.map((entry) => entry.position), [1, 2]);
+  const currentPlans = await prisma.tayaDailySchedule.findMany({
+    where: { serviceDate },
+    orderBy: { position: 'asc' },
+    include: { queueEntry: true },
+  });
+  assert.equal(currentPlans.length, 2);
+  assert.equal(currentPlans.every((plan) => plan.queueEntry && !historicalQueueIds.includes(plan.queueEntry.id)), true);
+
+  const after = await prisma.queueEntry.findMany({
+    where: { id: { in: historicalQueueIds } },
+    orderBy: { id: 'asc' },
+    select: { id: true, position: true, status: true, arrivalTimestamp: true, lateAt: true, createdAt: true, updatedAt: true },
+  });
+  assert.deepEqual(after, before);
+  assert.deepEqual(await prisma.tripAssignment.findUniqueOrThrow({
+    where: { id: 'seed_assignment_legazpi' },
+    select: { status: true, queueEntryId: true, respondedAt: true },
+  }), oldAssignmentBefore);
+  assert.equal(await prisma.tayaDailySchedule.count({ where: { serviceDate: yesterdayDate } }), 2);
+});
+
 test('4d. Taya marks only the absent immediate follower late when the preceding van is dispatched', async () => {
   const now = new Date();
   const serviceDate = manilaServiceDay(now).date;

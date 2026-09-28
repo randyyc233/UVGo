@@ -102,12 +102,14 @@ async function rotateAbsentTayaFollowerAfterDeparture(
   departedAt: Date,
 ) {
   if (!departedQueueEntryId || departedPosition === null) return null;
+  const serviceDate = new Date(`${manilaServiceDay(departedAt).date}T00:00:00.000Z`);
 
   const activeRows = await transaction.queueEntry.findMany({
     where: {
       route: RouteCode.LEGAZPI,
       status: { in: activeQueueStatuses },
       vehicle: { status: { notIn: [VehicleStatus.ON_TRIP, VehicleStatus.UNAVAILABLE] } },
+      tayaDailySchedule: { is: { serviceDate } },
     },
     orderBy: queueOrder,
     include: { vehicle: true },
@@ -324,7 +326,7 @@ function activeDepartureQueueWhere(route: RouteCode, observedAt: Date): Prisma.Q
     vehicle: { status: { notIn: [VehicleStatus.ON_TRIP, VehicleStatus.UNAVAILABLE] } },
     ...(route === RouteCode.GOA
       ? { scheduledLoadingTime: { gte: serviceDay.start, lt: serviceDay.end } }
-      : {}),
+      : { tayaDailySchedule: { is: { serviceDate: new Date(`${serviceDay.date}T00:00:00.000Z`) } } }),
   };
 }
 
@@ -594,8 +596,16 @@ export async function recordDriverLocation(
       await prisma.vehicle.update({ where: { id: vehicle.id }, data: { terminalEntrySampleCount: nextCount, terminalExitSampleCount: 0 } });
       if (nextCount >= TERMINAL_GEOFENCE.requiredSamples) {
         await withRouteQueue(vehicle.route, async (transaction) => {
+          const serviceDay = manilaServiceDay(observedAt);
+          const tayaServiceDate = new Date(`${serviceDay.date}T00:00:00.000Z`);
           const existingQueue = await transaction.queueEntry.findFirst({
-            where: { vehicleId: vehicle.id, status: { in: activeQueueStatuses } },
+            where: {
+              vehicleId: vehicle.id,
+              status: { in: activeQueueStatuses },
+              ...(vehicle.route === RouteCode.LEGAZPI
+                ? { tayaDailySchedule: { is: { serviceDate: tayaServiceDate } } }
+                : {}),
+            },
             orderBy: { arrivalTimestamp: 'desc' },
           });
           let queueEntryId = existingQueue?.id ?? null;
@@ -623,7 +633,15 @@ export async function recordDriverLocation(
             },
           });
 
-          const activeTrip = await transaction.trip.findFirst({ where: { vehicleId: vehicle.id, status: { in: activeTripStatuses } } });
+          const activeTrip = await transaction.trip.findFirst({
+            where: {
+              vehicleId: vehicle.id,
+              status: { in: activeTripStatuses },
+              ...(vehicle.route === RouteCode.LEGAZPI
+                ? { scheduledOrTriggeredTime: { gte: serviceDay.start, lt: serviceDay.end } }
+                : {}),
+            },
+          });
           if (vehicle.route === RouteCode.LEGAZPI && !activeTrip && queueEntryId) {
             const trip = await transaction.trip.create({
               data: {
@@ -847,9 +865,20 @@ export async function assignScheduledVehicleDriver(
 }
 
 async function activateLegacyPendingAssignments(actorUserId: string, route: RouteCode, now: Date) {
+  const serviceDate = new Date(`${manilaServiceDay(now).date}T00:00:00.000Z`);
   return withRouteQueue(route, async (transaction) => {
     const pending = await transaction.tripAssignment.findMany({
-      where: { status: AssignmentStatus.PENDING, trip: { route, status: { in: activeTripStatuses }, departedAt: null } },
+      where: {
+        status: AssignmentStatus.PENDING,
+        trip: {
+          route,
+          status: { in: activeTripStatuses },
+          departedAt: null,
+          ...(route === RouteCode.LEGAZPI
+            ? { tayaDailySchedule: { is: { serviceDate } } }
+            : {}),
+        },
+      },
       include: { trip: true, queueEntry: true },
     });
     for (const assignment of pending) {
@@ -961,16 +990,28 @@ async function evaluateGoso(actorUserId: string, now: Date) {
   return { assigned, ready };
 }
 
-export async function recalculateTayaReadiness() {
+export async function recalculateTayaReadiness(now = new Date()) {
+  const serviceDay = manilaServiceDay(now);
+  const serviceDate = new Date(`${serviceDay.date}T00:00:00.000Z`);
   return withRouteQueue(RouteCode.LEGAZPI, async (transaction) => {
   const queue = await transaction.queueEntry.findMany({
-    where: { route: RouteCode.LEGAZPI, status: { in: [QueueStatus.WAITING, QueueStatus.ASSIGNED, QueueStatus.ACCEPTED, QueueStatus.READY_FOR_DISPATCH] } },
+    where: {
+      route: RouteCode.LEGAZPI,
+      status: { in: [QueueStatus.WAITING, QueueStatus.ASSIGNED, QueueStatus.ACCEPTED, QueueStatus.READY_FOR_DISPATCH] },
+      tayaDailySchedule: { is: { serviceDate } },
+    },
     orderBy: queueOrder,
     include: {
       vehicle: {
         include: {
           trips: {
-            where: { status: { in: activeTripStatuses } },
+            where: {
+              status: { in: activeTripStatuses },
+              scheduledOrTriggeredTime: {
+                gte: serviceDay.start,
+                lt: serviceDay.end,
+              },
+            },
             orderBy: { scheduledOrTriggeredTime: 'asc' },
             take: 1,
             include: { passengerCounts: { orderBy: { timestamp: 'desc' }, take: 1 } },
@@ -1032,7 +1073,7 @@ async function runRouteDispatchEngine(route: RouteCode, actorUserId: string | un
   if (route === RouteCode.LEGAZPI) await syncTayaDailyQueue(now);
   const expiredAssignments = await activateLegacyPendingAssignments(actor, route, now);
   const goso = route === RouteCode.GOA ? await evaluateGoso(actor, now) : { assigned: 0, ready: 0 };
-  const taya = route === RouteCode.LEGAZPI ? await recalculateTayaReadiness() : { evaluated: 0, readyEntryId: null };
+  const taya = route === RouteCode.LEGAZPI ? await recalculateTayaReadiness(now) : { evaluated: 0, readyEntryId: null };
   return { evaluatedAt: now.toISOString(), expiredAssignments, goso, taya };
 }
 

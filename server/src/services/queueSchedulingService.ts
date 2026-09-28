@@ -28,11 +28,16 @@ export async function withRouteQueue<T>(route: RouteCode, work: (tx: Prisma.Tran
 }
 
 export async function normalizeSavedQueue(tx: Prisma.TransactionClient, route: RouteCode) {
+  const today = manilaServiceDay(new Date());
+  const tayaServiceDate = new Date(`${today.date}T00:00:00.000Z`);
   const rows = await tx.queueEntry.findMany({
     where: {
       route,
       status: { in: operationalQueueStatuses },
       vehicle: { status: { notIn: [VehicleStatus.ON_TRIP, VehicleStatus.UNAVAILABLE] } },
+      ...(route === RouteCode.LEGAZPI
+        ? { tayaDailySchedule: { is: { serviceDate: tayaServiceDate } } }
+        : {}),
     },
     orderBy: queueOrder,
   });
@@ -675,6 +680,9 @@ export async function reorderDispatcherQueue(actorUserId: string, route: RouteCo
         route,
         status: { in: operationalQueueStatuses },
         vehicle: { status: { notIn: [VehicleStatus.ON_TRIP, VehicleStatus.UNAVAILABLE] } },
+        ...(route === RouteCode.LEGAZPI
+          ? { tayaDailySchedule: { is: { serviceDate: new Date(`${manilaServiceDay(now).date}T00:00:00.000Z`) } } }
+          : {}),
       },
     });
     if (!targetEntry) throw new AppError(409, 'QUEUE_ENTRY_INACTIVE', 'Only active queue entries can be reordered.');
@@ -687,7 +695,9 @@ export async function reorderDispatcherQueue(actorUserId: string, route: RouteCo
         vehicle: { status: { notIn: [VehicleStatus.ON_TRIP, VehicleStatus.UNAVAILABLE] } },
         ...(route === RouteCode.GOA && targetEntry.scheduledLoadingTime
           ? { scheduledLoadingTime: { gte: day.start, lt: day.end } }
-          : {}),
+          : route === RouteCode.LEGAZPI
+            ? { tayaDailySchedule: { is: { serviceDate: new Date(`${day.date}T00:00:00.000Z`) } } }
+            : {}),
       },
       orderBy: queueOrder,
     });

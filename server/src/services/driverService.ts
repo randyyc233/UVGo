@@ -98,12 +98,19 @@ async function ownVehicle(driverId: string) {
 export async function getDriverOverview(driverId: string) {
   const now = new Date();
   const currentDay = manilaServiceDay(now);
+  const tayaServiceDate = new Date(`${currentDay.date}T00:00:00.000Z`);
   const vehicle = await prisma.vehicle.findUnique({
     where: { assignedDriverId: driverId },
     include: {
       assignedDriver: { select: { name: true, contact: true } },
       queueEntries: {
-        where: { status: { notIn: [QueueStatus.DEPARTED, QueueStatus.REJECTED, QueueStatus.REPLACED] } },
+        where: {
+          status: { notIn: [QueueStatus.DEPARTED, QueueStatus.REJECTED, QueueStatus.REPLACED] },
+          OR: [
+            { route: RouteCode.GOA },
+            { route: RouteCode.LEGAZPI, tayaDailySchedule: { is: { serviceDate: tayaServiceDate } } },
+          ],
+        },
         orderBy: { createdAt: 'desc' },
       },
       trips: {
@@ -196,7 +203,7 @@ export async function getDriverOverview(driverId: string) {
       status: { notIn: [QueueStatus.DEPARTED, QueueStatus.REJECTED, QueueStatus.REPLACED] },
       ...(vehicle.route === RouteCode.GOA
         ? { scheduledLoadingTime: { gte: currentDay.start, lt: currentDay.end } }
-        : {}),
+        : { tayaDailySchedule: { is: { serviceDate: tayaServiceDate } } }),
     },
     orderBy: queueOrder,
     include: { vehicle: { select: { status: true } } },

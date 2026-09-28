@@ -96,12 +96,17 @@ function displayCoordinates(index: number, inside: boolean) {
 
 async function queueRows(route?: RouteCode) {
   const today = manilaServiceDay(new Date());
+  const tayaServiceDate = new Date(`${today.date}T00:00:00.000Z`);
   const entries = await prisma.queueEntry.findMany({
     where: {
       route,
       status: { notIn: [QueueStatus.DEPARTED, QueueStatus.REJECTED, QueueStatus.REPLACED] },
       vehicle: { status: { notIn: [VehicleStatus.ON_TRIP, VehicleStatus.UNAVAILABLE] } },
-      ...(route === RouteCode.GOA ? { scheduledLoadingTime: { gte: today.start, lt: today.end } } : {}),
+      ...(route === RouteCode.GOA
+        ? { scheduledLoadingTime: { gte: today.start, lt: today.end } }
+        : route === RouteCode.LEGAZPI
+          ? { tayaDailySchedule: { is: { serviceDate: tayaServiceDate } } }
+          : {}),
     },
     orderBy: [{ route: 'asc' }, { position: 'asc' }],
     include: {
@@ -172,6 +177,7 @@ export async function getDispatcherDashboard(route: RouteCode, dispatcherId: str
     await materializeWeeklySchedules(new Date());
     await admitAcceptedGosoSchedulesForDay();
   }
+  if (route === RouteCode.LEGAZPI) await syncTayaDailyQueue();
   const [vehicles, queues, pendingPayments, tripsDispatched, trips, geofenceEvents, logs, replacementTrips] = await Promise.all([
     prisma.vehicle.findMany({
       where: { route },
@@ -554,12 +560,21 @@ async function updateDispatcherPassengers(actorUserId: string, route: RouteCode,
       throw new AppError(409, 'QUEUE_ENTRY_NOT_ACTIVE', 'Passenger counts can only be updated for a van in the active queue.');
     }
     const day = manilaServiceDay(new Date());
+    const tayaServiceDate = new Date(`${day.date}T00:00:00.000Z`);
+    if (route === RouteCode.LEGAZPI) {
+      const currentPlan = await tx.tayaDailySchedule.findUnique({ where: { queueEntryId: entry.id } });
+      if (currentPlan?.serviceDate.getTime() !== tayaServiceDate.getTime()) {
+        throw new AppError(409, 'QUEUE_ENTRY_NOT_ACTIVE', 'Passenger counts can only be updated for a van in today\'s active queue.');
+      }
+    }
     const firstEntry = await tx.queueEntry.findFirst({
       where: {
         route,
         status: { in: operationalQueueStatuses },
         vehicle: { status: { notIn: [VehicleStatus.ON_TRIP, VehicleStatus.UNAVAILABLE] } },
-        ...(route === RouteCode.GOA ? { scheduledLoadingTime: { gte: day.start, lt: day.end } } : {}),
+        ...(route === RouteCode.GOA
+          ? { scheduledLoadingTime: { gte: day.start, lt: day.end } }
+          : { tayaDailySchedule: { is: { serviceDate: tayaServiceDate } } }),
       },
       orderBy: { position: 'asc' },
       select: { id: true },
@@ -589,9 +604,18 @@ async function updateDispatcherPassengers(actorUserId: string, route: RouteCode,
 }
 
 export async function applyQueueAction(actorUserId: string, dispatcherRoute: RouteCode, queueEntryId: string, input: QueueActionInput) {
-  const entry = await prisma.queueEntry.findUnique({ where: { id: queueEntryId }, include: { vehicle: true } });
+  const entry = await prisma.queueEntry.findUnique({
+    where: { id: queueEntryId },
+    include: { vehicle: true, tayaDailySchedule: true },
+  });
   if (!entry) throw new AppError(404, 'QUEUE_ENTRY_NOT_FOUND', 'This queue entry was not found.');
   if (entry.route !== dispatcherRoute) throw new AppError(403, 'ROUTE_ACCESS_DENIED', `This dispatcher can manage only the ${routeLabels[dispatcherRoute]} route.`);
+  if (dispatcherRoute === RouteCode.LEGAZPI) {
+    const today = new Date(`${manilaServiceDay(new Date()).date}T00:00:00.000Z`);
+    if (entry.tayaDailySchedule?.serviceDate.getTime() !== today.getTime()) {
+      throw new AppError(409, 'QUEUE_ENTRY_NOT_ACTIVE', 'Only entries in today\'s Taya queue can be changed.');
+    }
+  }
 
   if (input.action === 'dispatch') {
     await dispatchQueueDeparture(actorUserId, dispatcherRoute, entry.id, input.reason);
