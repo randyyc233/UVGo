@@ -86,6 +86,9 @@ export async function syncTayaDailyQueueInTransaction(tx: Prisma.TransactionClie
     where: {
       route: RouteCode.LEGAZPI,
       status: { in: operationalQueueStatuses },
+      // Reconcile only rows owned by today's dated Taya occurrence. Older
+      // operational rows are historical records and must remain untouched.
+      tayaDailySchedule: { is: { serviceDate } },
       ...(plannedQueueIds.length ? { id: { notIn: plannedQueueIds } } : {}),
     },
     select: { id: true },

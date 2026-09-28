@@ -388,13 +388,7 @@ export function DispatcherFleetPage() {
   return (
     <div className="grid gap-4 xl:grid-cols-[1.35fr_0.65fr]">
       <div className="relative -mx-4 sm:-mx-6 lg:hidden">
-          <FleetMap fleet={fleet} fullPage />
-          <div className="pointer-events-none absolute inset-x-4 top-4 z-10 sm:inset-x-6">
-            <div className="inline-flex flex-col rounded-card border border-border/80 bg-surface/95 px-4 py-3 shadow-floating backdrop-blur">
-              <span className="text-xs font-bold uppercase tracking-[0.12em] text-primary">Fleet Map</span>
-              <h2 className="mt-1 font-extrabold">NCEBT terminal &amp; Active Zones</h2>
-            </div>
-          </div>
+        <FleetMap fleet={fleet} fullPage />
         <MobileFleetSheet fleet={fleet} />
       </div>
       <Card padded={false} className="hidden overflow-hidden lg:block">

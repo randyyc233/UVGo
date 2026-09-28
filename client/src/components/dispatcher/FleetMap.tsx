@@ -82,7 +82,7 @@ export function FleetMap({ fleet, compact = false, fullPage = false }: FleetMapP
   return (
     <div className={`relative overflow-hidden ${mapHeightClass}`}>
       <div ref={containerRef} className="h-full w-full" aria-label={`Dispatcher fleet map showing the NCEBT ${terminalRadiusMeters} meter terminal arrival zone, 5 kilometer Active Zone, and current vehicle positions`} />
-      <div className={`absolute left-3 z-10 flex max-w-[calc(100%_-_5rem)] flex-col gap-2 ${fullPage ? 'top-24' : 'top-3'}`}>
+      <div className="absolute left-3 top-3 z-10 flex max-w-[calc(100%_-_5rem)] flex-col gap-2">
         <button
           type="button"
           className="w-fit rounded-control border border-amber-700/30 bg-white/95 px-3 py-2 text-left text-xs font-extrabold text-amber-800 shadow-card backdrop-blur hover:bg-amber-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-600"
