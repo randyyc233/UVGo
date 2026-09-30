@@ -9,6 +9,7 @@ interface BookingSummaryProps {
   paymentMethod?: 'paypal' | 'gcash';
   compact?: boolean;
   passengerCount?: number;
+  total: number;
 }
 
 const money = new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP' });
@@ -34,10 +35,8 @@ function isSameCalendarDay(firstValue: string, secondValue: string) {
     && first.getDate() === second.getDate();
 }
 
-export function BookingSummary({ trip, seats, paymentMethod, compact = false, passengerCount }: BookingSummaryProps) {
-  const count = seats.length || passengerCount || 0;
-  const fare = trip.fare * count;
-  const total = fare;
+export function BookingSummary({ trip, seats, paymentMethod, compact = false, passengerCount, total }: BookingSummaryProps) {
+  const count = passengerCount ?? seats.length;
   return (
     <Card className={compact ? 'p-4' : 'p-5'}>
       <h2 className="text-lg font-extrabold">Booking summary</h2>
@@ -53,13 +52,13 @@ export function BookingSummary({ trip, seats, paymentMethod, compact = false, pa
             </dl>
           </div>
         </div>
-        <div className="flex gap-3"><UsersRound className="mt-0.5 h-4 w-4 shrink-0 text-primary" /><p>{count} passenger{count === 1 ? '' : 's'}</p></div>
-        <div className="flex gap-3"><TicketCheck className="mt-0.5 h-4 w-4 shrink-0 text-primary" /><p>{seats.length ? `Seat${seats.length === 1 ? '' : 's'} ${seats.join(', ')}` : 'No seat selected yet'}</p></div>
+        <div className="flex gap-3"><UsersRound className="mt-0.5 h-4 w-4 shrink-0 text-primary" /><div><p>{count} passenger{count === 1 ? '' : 's'}</p><p className="mt-1 text-text-secondary">{trip.availableSeats} seats available · Maximum {Math.min(11, trip.availableSeats)} passengers</p></div></div>
+        <div className="flex gap-3"><TicketCheck className="mt-0.5 h-4 w-4 shrink-0 text-primary" /><p className="font-bold">{seats.length ? `Seat${seats.length === 1 ? '' : 's'} ${seats.map((seat) => `#${seat}`).join(', ')}` : 'No seat selected yet'}</p></div>
         {paymentMethod ? <div className="flex gap-3"><WalletCards className="mt-0.5 h-4 w-4 shrink-0 text-primary" /><p>{paymentLabels[paymentMethod]}</p></div> : null}
       </div>
       <div className="mt-4 space-y-2 border-t border-border pt-4 text-sm">
-        <div className="flex justify-between"><span className="text-text-secondary">{money.format(trip.fare)} × {count} seat{count === 1 ? '' : 's'}</span><span>{money.format(fare)}</span></div>
-        <div className="flex justify-between text-base font-extrabold text-primary-dark"><span>Total</span><span>{money.format(total)}</span></div>
+        <div className="flex flex-wrap justify-between gap-2"><span className="text-text-secondary">{money.format(trip.fare)} × {seats.length} selected seat{seats.length === 1 ? '' : 's'}</span><span>{money.format(total)}</span></div>
+        <div className="rounded-control border border-primary/20 bg-primary-soft p-4" aria-live="polite" aria-atomic="true"><p className="text-sm font-bold text-primary-dark">Total Price</p><p className="mt-1 text-xl font-bold tracking-tight text-primary-dark">{money.format(total)}</p></div>
       </div>
     </Card>
   );

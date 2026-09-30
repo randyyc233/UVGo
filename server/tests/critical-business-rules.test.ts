@@ -61,6 +61,7 @@ import {
 import { getPublicDepartures, getPublicRoutes } from '../src/services/publicService.js';
 import { AppError } from '../src/utils/AppError.js';
 import { queueActionSchema } from '../src/validators/dispatcherValidators.js';
+import { gcashReservationSchema, paypalHostedReservationSchema, rescheduleSchema, tripSearchSchema } from '../src/validators/passengerValidators.js';
 import { disconnectSeedClient, resetDemoData } from '../prisma/seed.js';
 import { admitAcceptedGosoSchedulesForDay, evaluateGosoLoading, normalizeSavedQueue, operationalQueueStatuses, withRouteQueue } from '../src/services/queueSchedulingService.js';
 import { manilaServiceDay, manilaServiceWeek } from '../src/services/driverSchedulePolicy.js';
@@ -1051,6 +1052,37 @@ test('8a. Goa seat maps expose only 11 passenger seats', async () => {
   await assert.rejects(
     createGcashReservation({ passengerId: 'seed_user_passenger_ana', tripId: 'seed_trip_goa_day_three', seats: [12], contact: '09170000001', gcashReference: 'GCASH-INVALID-SEAT', receiptImageKey: 'test.png', receiptMimeType: 'image/png' }),
     (error: unknown) => error instanceof AppError && error.code === 'INVALID_SEAT',
+  );
+});
+
+test('passenger reservations allow up to 11 available seats and retain availability checks', async () => {
+  const seats = Array.from({ length: 11 }, (_, index) => index + 1);
+  const input = { tripId: 'seed_trip_goa_day_three', seats, contact: '09170000001' };
+  assert.equal(tripSearchSchema.parse({ passengers: '11' }).passengers, 11);
+  for (const passengers of [0, 12, 1.5]) {
+    assert.equal(tripSearchSchema.safeParse({ passengers }).success, false);
+  }
+  for (const schema of [gcashReservationSchema, paypalHostedReservationSchema, rescheduleSchema]) {
+    assert.equal(schema.safeParse(input).success, true);
+    assert.equal(schema.safeParse({ ...input, seats: [...seats, 12] }).success, false);
+    assert.equal(schema.safeParse({ ...input, seats: [] }).success, false);
+    assert.equal(schema.safeParse({ ...input, seats: [1, 1] }).success, false);
+  }
+
+  const booking = await createGcashReservation({
+    ...gcashReservationSchema.parse(input), passengerId: 'seed_user_passenger_ana',
+    receiptImageKey: 'test.png', receiptMimeType: 'image/png',
+  });
+  assert.deepEqual(booking.seats, seats);
+  assert.equal(booking.seatCount, 11);
+  assert.equal(booking.totalAmount, DEFAULT_GOA_FARE * 11);
+  const trip = (await searchGoaTrips(undefined, 11)).find((option) => option.id === input.tripId);
+  assert.equal(trip?.availableSeats, 0);
+  assert.equal(trip?.canFitParty, false);
+  assert.equal((await getTripSeats(input.tripId)).seats.filter((seat) => seat.available).length, 0);
+  await assert.rejects(
+    createGcashReservation({ ...input, seats: [1], passengerId: 'seed_user_passenger_maria', receiptImageKey: 'test.png', receiptMimeType: 'image/png' }),
+    (error: unknown) => error instanceof AppError && error.code === 'SEAT_UNAVAILABLE',
   );
 });
 

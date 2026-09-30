@@ -3,14 +3,14 @@ import { MAX_VAN_PASSENGER_CAPACITY } from '../config/vehicle.js';
 
 // The upper bound is the largest capacity any van may have; the passenger
 // service re-checks each seat against the capacity of the trip's own vehicle.
-const seats = z.array(z.coerce.number().int().min(1).max(MAX_VAN_PASSENGER_CAPACITY)).min(1).max(4).refine(
+const seats = z.array(z.coerce.number().int().min(1).max(MAX_VAN_PASSENGER_CAPACITY)).min(1).max(11).refine(
   (values) => new Set(values).size === values.length,
   'Each selected seat must be unique.',
 );
 
 export const tripSearchSchema = z.object({
   date: z.string().date().optional(),
-  passengers: z.coerce.number().int().min(1).max(4).default(1),
+  passengers: z.coerce.number().int().min(1).max(11).default(1),
 });
 
 export const paypalReservationSchema = z.object({

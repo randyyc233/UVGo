@@ -6,6 +6,7 @@ import { AuthProvider } from './auth/AuthProvider';
 import { ToastProvider } from './components/ui';
 import './index.css';
 import './styles/dashboard.css';
+import './styles/reservation.css';
 
 const rootElement = document.getElementById('root');
 

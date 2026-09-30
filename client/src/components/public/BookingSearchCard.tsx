@@ -67,10 +67,9 @@ export function BookingSearchCard() {
           onChange={(event) => setPassengers(event.target.value)}
           leadingIcon={<UsersRound className="h-4 w-4" />}
         >
-          <option value="1">1 Passenger</option>
-          <option value="2">2 Passengers</option>
-          <option value="3">3 Passengers</option>
-          <option value="4">4 Passengers</option>
+          {Array.from({ length: 11 }, (_, index) => index + 1).map((count) => (
+            <option key={count} value={count}>{count} Passenger{count === 1 ? '' : 's'}</option>
+          ))}
         </Select>
         <Button type="submit" size="lg" className="sm:col-span-2 lg:col-span-1 lg:min-w-44" trailingIcon={<ArrowRight className="h-4 w-4" />}>
           Search trips

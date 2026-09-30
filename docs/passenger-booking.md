@@ -54,6 +54,12 @@ on the server. The dispatcher schedule form prefills its fare from the server-pr
 
 ## Seat integrity
 
+A reservation can contain up to **11 passengers**, limited to the selected trip's
+remaining available seats: `min(11, available seats)`. The public search and booking
+selectors support 1–11 passengers; search and reservation request validation enforce
+the same ceiling. Fully booked departures cannot be selected. Existing seat availability
+checks and fare calculations continue to apply to every selected seat.
+
 Seat availability comes from the database rather than client state. `ReservationSeat` has a unique `(tripId, seatNumber)` constraint, and booking creation runs inside a Prisma transaction. A concurrent uniqueness conflict is normalized to `409 SEAT_UNAVAILABLE`, prompting the passenger to choose again.
 
 The selected trip is revalidated when its seat map is opened and again inside the reservation transaction. A departure that has passed or moved to a non-bookable operational status returns `409 TRIP_CLOSED`, so a trip that closes after search cannot accept a stale submission. The reservation, payment record, seat rows, passenger contact update, and passenger notification commit together.
