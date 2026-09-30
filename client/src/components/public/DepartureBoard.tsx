@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { BusFront, Clock3, RefreshCw, Route, TicketCheck, UsersRound } from 'lucide-react';
-import { Link } from 'react-router-dom';
+import { Link, useLocation, useSearchParams } from 'react-router-dom';
 import { apiRequest } from '../../api/http';
 import { formatDateTime12, formatTime12 } from '../../lib/dateTime';
 import type { PublicDeparture, PublicDeparturesResponse } from '../../types/public';
@@ -9,6 +9,12 @@ import { Button, Card, EmptyState, IconButton, LoadingSkeleton } from '../ui';
 function formatDepartureTime(value: string | null) {
   if (!value) return 'Schedule pending';
   return formatDateTime12(value);
+}
+
+type RouteFilter = 'all' | 'goa' | 'legazpi';
+
+function getRouteFilter(value: string | null): RouteFilter {
+  return value === 'goa' || value === 'legazpi' ? value : 'all';
 }
 
 function DepartureMobileCard({ departure }: { departure: PublicDeparture }) {
@@ -61,11 +67,13 @@ function DepartureMobileCard({ departure }: { departure: PublicDeparture }) {
 }
 
 export function DepartureBoard() {
+  const location = useLocation();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [data, setData] = useState<PublicDeparturesResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [routeFilter, setRouteFilter] = useState<'all' | 'goa' | 'legazpi'>('all');
+  const routeFilter = getRouteFilter(searchParams.get('route'));
 
   const loadDepartures = useCallback(async (background = false) => {
     if (background) setRefreshing(true);
@@ -88,6 +96,18 @@ export function DepartureBoard() {
     const interval = window.setInterval(() => void loadDepartures(true), 8_000);
     return () => window.clearInterval(interval);
   }, [loadDepartures]);
+
+  useEffect(() => {
+    if (location.hash !== '#departures') return;
+    document.getElementById('departures')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, [location.hash, location.search]);
+
+  function changeRouteFilter(filter: RouteFilter) {
+    const nextSearchParams = new URLSearchParams(searchParams);
+    if (filter === 'all') nextSearchParams.delete('route');
+    else nextSearchParams.set('route', filter);
+    setSearchParams(nextSearchParams, { replace: true });
+  }
 
   const filteredDepartures = useMemo(
     () => data?.departures.filter((departure) => routeFilter === 'all' || departure.routeCode === routeFilter) ?? [],
@@ -122,7 +142,7 @@ export function DepartureBoard() {
               type="button"
               aria-pressed={routeFilter === filter}
               className={`min-h-touch rounded-pill border px-4 text-sm font-semibold capitalize transition-colors ${routeFilter === filter ? 'border-primary bg-primary text-text-inverse' : 'border-border bg-surface text-text-secondary hover:border-primary'}`}
-              onClick={() => setRouteFilter(filter)}
+              onClick={() => changeRouteFilter(filter)}
             >
               {filter}
             </button>

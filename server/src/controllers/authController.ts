@@ -3,6 +3,7 @@ import { env } from '../config/env.js';
 import { SESSION_COOKIE } from '../middleware/authMiddleware.js';
 import {
   authenticateUser,
+  authenticateGooglePassenger,
   registerPassenger,
   requestEmailVerification,
   requestPasswordReset,
@@ -13,6 +14,7 @@ import {
 import { AppError } from '../utils/AppError.js';
 import {
   forgotPasswordSchema,
+  googleLoginSchema,
   loginSchema,
   passengerSignupSchema,
   resendVerificationSchema,
@@ -32,6 +34,14 @@ const cookieOptions: CookieOptions = {
 export async function login(request: Request, response: Response) {
   const input = loginSchema.parse(request.body);
   const result = await authenticateUser(input.email, input.password);
+
+  response.cookie(SESSION_COOKIE, result.token, cookieOptions);
+  response.status(200).json({ user: result.user });
+}
+
+export async function googleLogin(request: Request, response: Response) {
+  const input = googleLoginSchema.parse(request.body);
+  const result = await authenticateGooglePassenger(input.credential);
 
   response.cookie(SESSION_COOKIE, result.token, cookieOptions);
   response.status(200).json({ user: result.user });

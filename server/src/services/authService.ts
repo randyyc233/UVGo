@@ -1,6 +1,7 @@
 import { AuthChallengePurpose, Prisma, UserRole, type RouteCode, type User } from '@prisma/client';
 import { compare, hash } from 'bcryptjs';
-import { createHmac, randomInt, timingSafeEqual } from 'node:crypto';
+import { OAuth2Client } from 'google-auth-library';
+import { createHmac, randomBytes, randomInt, timingSafeEqual } from 'node:crypto';
 import jwt, { type SignOptions } from 'jsonwebtoken';
 import { env } from '../config/env.js';
 import { prisma } from '../lib/prisma.js';
@@ -54,6 +55,7 @@ export function toAuthenticatedUser(user: Pick<User, 'id' | 'role' | 'name' | 'c
 
 const AUTH_CODE_ATTEMPT_LIMIT = 5;
 const AUTH_CODE_RESEND_COOLDOWN_MS = 60_000;
+const googleOAuthClient = new OAuth2Client();
 
 function normalizeEmail(email: string) {
   return email.trim().toLowerCase();
@@ -175,6 +177,110 @@ export async function authenticateUser(email: string, password: string) {
   }
 
   return createSession(user);
+}
+
+function assertGooglePassenger(user: User) {
+  if (!user.isActive) {
+    throw new AppError(403, 'ACCOUNT_DISABLED', 'This UVGo account is disabled. Contact the terminal for assistance.');
+  }
+  if (user.role !== UserRole.PASSENGER) {
+    throw new AppError(403, 'GOOGLE_PASSENGER_ONLY', 'Continue with Google is available for passenger accounts only. Staff must sign in with their UVGo password.');
+  }
+  return user;
+}
+
+export async function authenticateGooglePassenger(credential: string) {
+  if (!env.GOOGLE_CLIENT_ID) {
+    throw new AppError(503, 'GOOGLE_AUTH_NOT_CONFIGURED', 'Continue with Google is not configured yet. Use your email and password to sign in.');
+  }
+
+  let payload;
+  try {
+    const ticket = await googleOAuthClient.verifyIdToken({
+      idToken: credential,
+      audience: env.GOOGLE_CLIENT_ID,
+    });
+    payload = ticket.getPayload();
+  } catch {
+    throw new AppError(401, 'INVALID_GOOGLE_CREDENTIAL', 'Google could not verify this sign-in. Please try again.');
+  }
+
+  const subject = payload?.sub;
+  const email = payload?.email?.trim().toLowerCase();
+  if (!subject || !email || payload?.email_verified !== true || subject.length > 191 || email.length > 191) {
+    throw new AppError(401, 'INVALID_GOOGLE_CREDENTIAL', 'Google did not provide a verified account identity.');
+  }
+
+  return authenticateVerifiedGooglePassenger({ subject, email, name: payload.name, hostedDomain: payload.hd });
+}
+
+interface VerifiedGoogleIdentity {
+  subject: string;
+  email: string;
+  name?: string;
+  hostedDomain?: string;
+}
+
+function googleIsAuthoritativeForEmail(identity: VerifiedGoogleIdentity) {
+  if (identity.email.endsWith('@gmail.com')) return true;
+  const hostedDomain = identity.hostedDomain?.trim().toLowerCase();
+  return Boolean(hostedDomain && identity.email.endsWith(`@${hostedDomain}`));
+}
+
+export async function authenticateVerifiedGooglePassenger(identity: VerifiedGoogleIdentity) {
+  const { subject, email } = identity;
+  const subjectUser = await prisma.user.findUnique({ where: { googleSubject: subject } });
+  if (subjectUser) return createSession(assertGooglePassenger(subjectUser));
+
+  const emailUser = await prisma.user.findUnique({ where: { email } });
+  if (emailUser) {
+    assertGooglePassenger(emailUser);
+    if (emailUser.googleSubject && emailUser.googleSubject !== subject) {
+      throw new AppError(409, 'GOOGLE_ACCOUNT_CONFLICT', 'This passenger email is already linked to another Google account.');
+    }
+    if (!googleIsAuthoritativeForEmail(identity)) {
+      throw new AppError(
+        409,
+        'GOOGLE_ACCOUNT_LINK_REQUIRED',
+        'Sign in with your UVGo password first before linking this third-party email to Google.',
+      );
+    }
+
+    const linkedUser = await prisma.user.update({
+      where: { id: emailUser.id },
+      data: {
+        googleSubject: subject,
+        emailVerifiedAt: emailUser.emailVerifiedAt ?? new Date(),
+      },
+    });
+    return createSession(linkedUser);
+  }
+
+  const fallbackName = email.split('@')[0] || 'UVGo Passenger';
+  const name = (identity.name?.trim() || fallbackName).slice(0, 120);
+  // Password login remains unavailable until this passenger explicitly uses
+  // UVGo's password-reset flow. A random hash prevents a usable shared default.
+  const passwordHash = await hash(randomBytes(32).toString('base64url'), 12);
+
+  try {
+    const user = await prisma.user.create({
+      data: {
+        role: UserRole.PASSENGER,
+        name,
+        email,
+        googleSubject: subject,
+        passwordHash,
+        emailVerifiedAt: new Date(),
+        isActive: true,
+      },
+    });
+    return createSession(user);
+  } catch (error) {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+      throw new AppError(409, 'GOOGLE_ACCOUNT_CONFLICT', 'This Google account or email is already linked to another UVGo account. Please try again.');
+    }
+    throw error;
+  }
 }
 
 export async function registerPassenger(input: { name: string; email: string; contact: string; password: string }) {

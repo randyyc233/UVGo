@@ -1,12 +1,10 @@
 import assert from 'node:assert/strict';
-import { createHmac } from 'node:crypto';
 import { after, beforeEach, test } from 'node:test';
 import { compare } from 'bcryptjs';
 import {
   AssignmentStatus,
   DispatchAction,
   GeofenceEventType,
-  PaymentMethod,
   PaymentStatus,
   QueueStatus,
   ReservationStatus,
@@ -52,7 +50,6 @@ import {
   getTripSeats,
   markAllPassengerNotificationsRead,
   markPassengerNotificationRead,
-  processPaymongoWebhookEvent,
   releasePaypalReservation,
   reschedulePassengerBooking,
   searchGoaTrips,
@@ -65,11 +62,10 @@ import { disconnectSeedClient, resetDemoData } from '../prisma/seed.js';
 import { admitAcceptedGosoSchedulesForDay, evaluateGosoLoading, normalizeSavedQueue, operationalQueueStatuses, withRouteQueue } from '../src/services/queueSchedulingService.js';
 import { manilaServiceDay, manilaServiceWeek } from '../src/services/driverSchedulePolicy.js';
 import { createWeeklySchedule, deleteWeeklySchedule, listWeeklySchedules, materializeWeeklySchedules, updateWeeklySchedule } from '../src/services/weeklyScheduleService.js';
-import { requestPasswordReset, resetPasswordWithCode } from '../src/services/authService.js';
+import { authenticateVerifiedGooglePassenger, requestPasswordReset, resetPasswordWithCode } from '../src/services/authService.js';
 import { createBackupDispatcher, getRouteDispatchers } from '../src/services/dispatcherAccountService.js';
 import { getDemoState } from '../src/services/demoService.js';
 import { createPayPalOrder } from '../src/services/paypalService.js';
-import { verifyPaymongoWebhookSignature, type PaymongoWebhookEvent } from '../src/services/paymongoService.js';
 import { getTayaWeeklySchedule, saveTayaWeeklySchedule, syncTayaDailyQueue } from '../src/services/tayaQueueService.js';
 
 if (!process.env.UVGO_ISOLATED_TEST_DATABASE || new URL(process.env.DATABASE_URL!).pathname !== `/${process.env.UVGO_ISOLATED_TEST_DATABASE}`) {
@@ -124,7 +120,6 @@ after(async () => {
   await prisma.$disconnect();
   await disconnectSeedClient();
 });
-
 test('assignment response weeks roll from Monday through Sunday in Manila', () => {
   const week = manilaServiceWeek(new Date('2026-09-25T05:40:00.000Z'));
   assert.equal(week.start.toISOString(), '2026-09-20T16:00:00.000Z');
@@ -166,6 +161,10 @@ test('public departure board exposes only queued vans without dispatcher statuse
   assert.ok(tayaDepartures.every((departure) => departure.departureTime === null));
   const publicRoutes = await getPublicRoutes();
   assert.equal(publicRoutes.routes.find((route) => route.protocol === 'Taya')?.nextDeparture, null);
+  assert.equal(
+    publicRoutes.routes.find((route) => route.protocol === 'Goso')?.nextDeparture,
+    initial.departures.find((departure) => departure.routeCode === 'goa')?.departureTime,
+  );
 
   await prisma.queueEntry.update({ where: { id: 'seed_queue_goa_1' }, data: { status: QueueStatus.DEPARTED } });
   await prisma.vehicle.update({ where: { id: 'seed_vehicle_021' }, data: { status: VehicleStatus.ON_TRIP } });
@@ -174,6 +173,13 @@ test('public departure board exposes only queued vans without dispatcher statuse
   assert.equal(updated.departures.some((departure) => departure.id === 'seed_queue_goa_1'), false);
   assert.equal(updated.departures.some((departure) => departure.id === 'seed_queue_goa_2'), false);
   assert.ok(updated.departures.every((departure) => !Object.hasOwn(departure, 'status')));
+
+  await prisma.vehicle.updateMany({
+    where: { route: RouteCode.GOA },
+    data: { status: VehicleStatus.UNAVAILABLE },
+  });
+  const routesWithoutGoaQueue = await getPublicRoutes();
+  assert.equal(routesWithoutGoaQueue.routes.find((route) => route.protocol === 'Goso')?.nextDeparture, null);
 });
 
 test('Goa dispatch logs can be deleted only by their owning route', async () => {
@@ -1123,6 +1129,47 @@ test('14. authenticated passengers cannot access dispatcher endpoints', async ()
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
   }
+});
+
+test('Google identities create or link passengers but never grant staff access', async () => {
+  const created = await authenticateVerifiedGooglePassenger({
+    subject: 'google-test-new-passenger',
+    email: 'google.passenger@example.com',
+    name: 'Google Passenger',
+  });
+  assert.equal(created.user.role, 'passenger');
+  assert.equal(created.user.emailVerified, true);
+  const storedGooglePassenger = await prisma.user.findUnique({ where: { googleSubject: 'google-test-new-passenger' } });
+  assert.equal(storedGooglePassenger?.email, 'google.passenger@example.com');
+  assert.equal(storedGooglePassenger?.contact, null);
+
+  const linked = await authenticateVerifiedGooglePassenger({
+    subject: 'google-test-existing-passenger',
+    email: 'passenger@uvgo.demo',
+    name: 'Ignored Google Name',
+    hostedDomain: 'uvgo.demo',
+  });
+  assert.equal(linked.user.id, 'seed_user_passenger_ana');
+  assert.equal((await prisma.user.findUnique({ where: { id: linked.user.id } }))?.googleSubject, 'google-test-existing-passenger');
+
+  await prisma.user.update({ where: { id: linked.user.id }, data: { googleSubject: null } });
+  await assert.rejects(
+    authenticateVerifiedGooglePassenger({
+      subject: 'google-test-nonauthoritative-email',
+      email: 'passenger@uvgo.demo',
+      name: 'Non-authoritative Account',
+    }),
+    (error: unknown) => error instanceof AppError && error.code === 'GOOGLE_ACCOUNT_LINK_REQUIRED',
+  );
+
+  await assert.rejects(
+    authenticateVerifiedGooglePassenger({
+      subject: 'google-test-staff-account',
+      email: 'dispatcher@uvgo.demo',
+      name: 'Staff Account',
+    }),
+    (error: unknown) => error instanceof AppError && error.code === 'GOOGLE_PASSENGER_ONLY',
+  );
 });
 
 test('registration offers email verification while sign-in requires only active valid credentials', async () => {
@@ -3358,109 +3405,4 @@ test('54. a Goa driver can hold multiple schedules on the same Manila calendar d
       assignments: { some: { driverId: 'seed_user_driver_rodel' } },
     },
   }), 2);
-});
-
-test('55. PayMongo webhook signatures use the timestamp and exact raw payload', () => {
-  const secret = 'whsk_test_uvgo_signature_secret';
-  const rawBody = Buffer.from('{"data":{"id":"evt_uvgo","type":"event"}}');
-  const timestamp = String(Math.floor(Date.now() / 1_000));
-  const signature = createHmac('sha256', secret).update(`${timestamp}.${rawBody.toString('utf8')}`).digest('hex');
-  assert.equal(verifyPaymongoWebhookSignature(rawBody, `t=${timestamp},te=${signature},li=`, secret), true);
-  assert.equal(verifyPaymongoWebhookSignature(Buffer.from(`${rawBody.toString('utf8')} `), `t=${timestamp},te=${signature},li=`, secret), false);
-});
-
-test('56. a verified QR Ph payment confirms its reservation exactly once', async () => {
-  await prisma.reservation.create({
-    data: {
-      id: 'paymongo_reservation_paid',
-      reference: 'UVGO-QRPH-PAID',
-      passengerId: 'seed_user_passenger_ana',
-      tripId: 'seed_trip_goa_day_three',
-      seatCount: 1,
-      fareAmount: DEFAULT_GOA_FARE,
-      status: ReservationStatus.PENDING_PAYMENT,
-      seats: { create: { tripId: 'seed_trip_goa_day_three', seatNumber: 6 } },
-      payments: {
-        create: {
-          id: 'paymongo_payment_paid',
-          method: PaymentMethod.PAYMONGO_QRPH,
-          amount: DEFAULT_GOA_FARE,
-          status: PaymentStatus.PENDING,
-          paymongoPaymentIntentId: 'pi_uvgo_paid',
-          paymongoPaymentMethodId: 'pm_uvgo_paid',
-          paymongoQrExpiresAt: new Date(Date.now() + 30 * 60_000),
-        },
-      },
-    },
-  });
-  const event: PaymongoWebhookEvent = {
-    data: {
-      id: 'evt_uvgo_paid',
-      type: 'event',
-      attributes: {
-        type: 'payment.paid',
-        livemode: false,
-        data: {
-          id: 'pay_uvgo_paid',
-          type: 'payment',
-          attributes: {
-            amount: Math.round(DEFAULT_GOA_FARE * 100),
-            currency: 'PHP',
-            status: 'paid',
-            payment_intent_id: 'pi_uvgo_paid',
-            paid_at: Math.floor(Date.now() / 1_000),
-          },
-        },
-      },
-    },
-  };
-  await processPaymongoWebhookEvent(event);
-  await processPaymongoWebhookEvent(event);
-  const payment = await prisma.payment.findUniqueOrThrow({ where: { id: 'paymongo_payment_paid' }, include: { reservation: true } });
-  assert.equal(payment.status, PaymentStatus.CAPTURED);
-  assert.equal(payment.paymongoPaymentId, 'pay_uvgo_paid');
-  assert.equal(payment.reservation.status, ReservationStatus.CONFIRMED);
-  assert.equal(await prisma.notification.count({ where: { userId: 'seed_user_passenger_ana', message: { contains: 'UVGO-QRPH-PAID' } } }), 1);
-});
-
-test('57. an expired QR Ph payment forfeits the unpaid hold and releases its seat', async () => {
-  await prisma.reservation.create({
-    data: {
-      id: 'paymongo_reservation_expired',
-      reference: 'UVGO-QRPH-EXPIRED',
-      passengerId: 'seed_user_passenger_ana',
-      tripId: 'seed_trip_goa_day_three',
-      seatCount: 1,
-      fareAmount: DEFAULT_GOA_FARE,
-      status: ReservationStatus.PENDING_PAYMENT,
-      seats: { create: { tripId: 'seed_trip_goa_day_three', seatNumber: 6 } },
-      payments: {
-        create: {
-          id: 'paymongo_payment_expired',
-          method: PaymentMethod.PAYMONGO_QRPH,
-          amount: DEFAULT_GOA_FARE,
-          status: PaymentStatus.PENDING,
-          paymongoPaymentIntentId: 'pi_uvgo_expired',
-          paymongoPaymentMethodId: 'pm_uvgo_expired',
-          paymongoQrExpiresAt: new Date(Date.now() - 1_000),
-        },
-      },
-    },
-  });
-  await processPaymongoWebhookEvent({
-    data: {
-      id: 'evt_uvgo_expired',
-      type: 'event',
-      attributes: {
-        type: 'qrph.expired',
-        livemode: false,
-        data: { id: 'pm_uvgo_expired', type: 'payment_method', attributes: { payment_intent_id: 'pi_uvgo_expired' } },
-      },
-    },
-  });
-  const payment = await prisma.payment.findUniqueOrThrow({ where: { id: 'paymongo_payment_expired' }, include: { reservation: true } });
-  assert.equal(payment.status, PaymentStatus.FAILED);
-  assert.equal(payment.reservation.status, ReservationStatus.FORFEITED);
-  const seatMap = await getTripSeats('seed_trip_goa_day_three');
-  assert.equal(seatMap.seats.find((seat) => seat.number === 6)?.available, true);
 });

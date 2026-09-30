@@ -2,6 +2,7 @@ import { useRef, useState, type FormEvent } from 'react';
 import { AlertCircle, ArrowRight, Eye, EyeOff, House, LockKeyhole, Mail, ShieldCheck } from 'lucide-react';
 import { Link, Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { Logo } from '../../components/brand/Logo';
+import { GoogleSignInButton } from '../../components/auth/GoogleSignInButton';
 import { HeroBackgroundSlideshow } from '../../components/public/HeroBackgroundSlideshow';
 import { Button, Card, Input } from '../../components/ui';
 import { ApiError } from '../../api/http';
@@ -15,18 +16,20 @@ const demoAccounts = [
 ];
 
 export function LoginPage() {
-  const { user, loading: authLoading, login } = useAuth();
+  const { user, loading: authLoading, login, googleLogin } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [googleSubmitting, setGoogleSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<{ email?: string; password?: string }>({});
   const emailRef = useRef<HTMLInputElement>(null);
   const passwordRef = useRef<HTMLInputElement>(null);
   const requestedPath = (location.state as { from?: string } | null)?.from;
+  const googleClientId = import.meta.env.VITE_GOOGLE_CLIENT_ID?.trim();
 
   if (!authLoading && user) {
     const destination = requestedPath?.startsWith(`/${user.role}/`) ? requestedPath : user.redirectTo;
@@ -105,6 +108,23 @@ export function LoginPage() {
       }
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  async function handleGoogleCredential(credential: string) {
+    if (googleSubmitting) return;
+    setGoogleSubmitting(true);
+    setError(null);
+    setFieldErrors({});
+
+    try {
+      const authenticatedUser = await googleLogin({ credential });
+      const canResumeRequestedPath = Boolean(requestedPath?.startsWith(`/${authenticatedUser.role}/`));
+      navigate(canResumeRequestedPath && requestedPath ? requestedPath : authenticatedUser.redirectTo, { replace: true });
+    } catch (caughtError) {
+      setError(caughtError instanceof ApiError ? caughtError.message : 'Unable to sign in with Google right now.');
+    } finally {
+      setGoogleSubmitting(false);
     }
   }
 
@@ -216,6 +236,24 @@ export function LoginPage() {
                 Sign in
               </Button>
             </form>
+
+            {googleClientId ? (
+              <>
+                <div className="my-5 flex items-center gap-3" aria-hidden="true">
+                  <span className="h-px flex-1 bg-border" />
+                  <span className="text-xs font-semibold uppercase tracking-[0.12em] text-text-muted">or use email</span>
+                  <span className="h-px flex-1 bg-border" />
+                </div>
+                <div aria-busy={googleSubmitting}>
+                  <GoogleSignInButton
+                    clientId={googleClientId}
+                    onCredential={(credential) => void handleGoogleCredential(credential)}
+                    onError={setError}
+                  />
+                  {googleSubmitting ? <p role="status" className="mt-2 text-center text-xs font-medium text-text-secondary">Signing in securely…</p> : null}
+                </div>
+              </>
+            ) : null}
 
             <p className="mt-4 text-center text-sm">
               <Link to="/forgot-password" className="font-bold text-primary-dark underline-offset-4 hover:underline">Forgot password?</Link>

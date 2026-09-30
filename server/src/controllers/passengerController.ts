@@ -20,7 +20,6 @@ import {
   getPassengerBooking,
   getPassengerBookings,
   getPassengerNotifications,
-  getPaymongoQrphCheckout,
   getTripSeats,
   releasePaypalReservation,
   markAllPassengerNotificationsRead,
@@ -94,11 +93,6 @@ export async function createGcash(request: Request, response: Response) {
     await unlink(request.file.path).catch(() => undefined);
     throw error;
   }
-}
-
-export async function paymongoQrphCheckout(request: Request, response: Response) {
-  const result = await getPaymongoQrphCheckout(request.auth!.userId, routeParameter(request.params.reference));
-  response.status(200).json(result);
 }
 
 export async function bookings(request: Request, response: Response) {

@@ -91,7 +91,7 @@ enum ReservationStatus {
 enum PaymentMethod {
   PAYPAL
   GCASH_RECEIPT
-  PAYMONGO_QRPH
+  LEGACY
 }
 
 enum PaymentStatus {
@@ -149,6 +149,7 @@ model User {
   name                  String                @db.VarChar(120)
   contact               String?               @db.VarChar(32)
   email                 String                @unique @db.VarChar(191)
+  googleSubject         String?               @unique @db.VarChar(191)
   passwordHash          String                @db.VarChar(191)
   emailVerifiedAt       DateTime?
   tokenVersion          Int                   @default(0)
@@ -193,36 +194,36 @@ model AuthChallenge {
 }
 
 model Vehicle {
-  id                        String              @id @default(cuid())
-  vanId                     String              @unique @db.VarChar(32)
-  plateNo                   String              @unique @db.VarChar(32)
+  id                        String               @id @default(cuid())
+  vanId                     String               @unique @db.VarChar(32)
+  plateNo                   String               @unique @db.VarChar(32)
   route                     RouteCode
   protocol                  DispatchProtocol
-  capacity                  Int                 @default(11)
-  status                    VehicleStatus       @default(OUTSIDE_ZONE)
-  assignedDriverId          String?             @unique
+  capacity                  Int                  @default(11)
+  status                    VehicleStatus        @default(OUTSIDE_ZONE)
+  assignedDriverId          String?              @unique
   managedByDispatcherId     String?
-  lastKnownInsideZone       Boolean             @default(false)
-  insideTerminalZone        Boolean             @default(false)
-  locationTrackingActive    Boolean             @default(false)
-  goOnTripEnabled           Boolean             @default(false)
+  lastKnownInsideZone       Boolean              @default(false)
+  insideTerminalZone        Boolean              @default(false)
+  locationTrackingActive    Boolean              @default(false)
+  goOnTripEnabled           Boolean              @default(false)
   latestArrivalAt           DateTime?
-  latestLatitude            Decimal?            @db.Decimal(10, 7)
-  latestLongitude           Decimal?            @db.Decimal(10, 7)
-  latestLocationAccuracyM   Decimal?            @db.Decimal(8, 2)
+  latestLatitude            Decimal?             @db.Decimal(10, 7)
+  latestLongitude           Decimal?             @db.Decimal(10, 7)
+  latestLocationAccuracyM   Decimal?             @db.Decimal(8, 2)
   latestLocationObservedAt  DateTime?
-  latestDistanceKm          Decimal?            @db.Decimal(7, 3)
-  terminalEntrySampleCount  Int                 @default(0)
-  terminalExitSampleCount   Int                 @default(0)
-  departureSequenceStartKm  Decimal?            @db.Decimal(7, 3)
+  latestDistanceKm          Decimal?             @db.Decimal(7, 3)
+  terminalEntrySampleCount  Int                  @default(0)
+  terminalExitSampleCount   Int                  @default(0)
+  departureSequenceStartKm  Decimal?             @db.Decimal(7, 3)
   departureAuthorizedAt     DateTime?
-  departureAuthorizedTripId String?             @db.VarChar(191)
-  departureReviewRequired   Boolean             @default(false)
-  departureReviewReason     String?             @db.VarChar(500)
-  createdAt                 DateTime            @default(now())
-  updatedAt                 DateTime            @updatedAt
-  assignedDriver            User?               @relation("VehicleDriver", fields: [assignedDriverId], references: [id], onDelete: SetNull)
-  managedByDispatcher       User?               @relation("DispatcherManagedVehicles", fields: [managedByDispatcherId], references: [id], onDelete: SetNull)
+  departureAuthorizedTripId String?              @db.VarChar(191)
+  departureReviewRequired   Boolean              @default(false)
+  departureReviewReason     String?              @db.VarChar(500)
+  createdAt                 DateTime             @default(now())
+  updatedAt                 DateTime             @updatedAt
+  assignedDriver            User?                @relation("VehicleDriver", fields: [assignedDriverId], references: [id], onDelete: SetNull)
+  managedByDispatcher       User?                @relation("DispatcherManagedVehicles", fields: [managedByDispatcherId], references: [id], onDelete: SetNull)
   geofenceEvents            GeofenceEvent[]
   queueEntries              QueueEntry[]
   trips                     Trip[]
@@ -433,31 +434,26 @@ model ReservationSeat {
 }
 
 model Payment {
-  id                      String        @id @default(cuid())
-  reservationId           String
-  method                  PaymentMethod
-  paypalOrderId           String?       @unique @db.VarChar(191)
-  gcashReference          String?       @db.VarChar(100)
-  paymongoPaymentIntentId String?       @unique @db.VarChar(191)
-  paymongoPaymentMethodId String?       @unique @db.VarChar(191)
-  paymongoPaymentId       String?       @unique @db.VarChar(191)
-  paymongoClientKey       String?       @db.VarChar(255)
-  paymongoQrExpiresAt     DateTime?
+  id                   String        @id @default(cuid())
+  reservationId        String
+  method               PaymentMethod
+  paypalOrderId        String?       @unique @db.VarChar(191)
+  gcashReference       String?       @db.VarChar(100)
   /// Normalized method + external transaction reference. Null when the
   /// passenger supplies no optional GCash reference.
-  externalReferenceKey    String?       @unique @db.VarChar(191)
-  receiptImageKey         String?       @db.VarChar(191)
-  receiptMimeType         String?       @db.VarChar(64)
-  amount                  Decimal       @db.Decimal(10, 2)
-  status                  PaymentStatus @default(PENDING)
-  paidAt                  DateTime?
-  verifiedByUserId        String?
-  verifiedAt              DateTime?
-  rejectionReason         String?       @db.VarChar(500)
-  createdAt               DateTime      @default(now())
-  updatedAt               DateTime      @updatedAt
-  reservation             Reservation   @relation(fields: [reservationId], references: [id], onDelete: Cascade)
-  verifiedBy              User?         @relation("PaymentVerifier", fields: [verifiedByUserId], references: [id], onDelete: SetNull)
+  externalReferenceKey String?       @unique @db.VarChar(191)
+  receiptImageKey      String?       @db.VarChar(191)
+  receiptMimeType      String?       @db.VarChar(64)
+  amount               Decimal       @db.Decimal(10, 2)
+  status               PaymentStatus @default(PENDING)
+  paidAt               DateTime?
+  verifiedByUserId     String?
+  verifiedAt           DateTime?
+  rejectionReason      String?       @db.VarChar(500)
+  createdAt            DateTime      @default(now())
+  updatedAt            DateTime      @updatedAt
+  reservation          Reservation   @relation(fields: [reservationId], references: [id], onDelete: Cascade)
+  verifiedBy           User?         @relation("PaymentVerifier", fields: [verifiedByUserId], references: [id], onDelete: SetNull)
 
   @@index([method, status, createdAt])
   @@index([reservationId])

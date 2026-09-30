@@ -13,6 +13,11 @@ coverage/
 .codex-tools/
 .playwright-cli/
 .workbuddy-ai/
+tmp/
+output/
+# Locally generated architecture/diagram exports are review artifacts, not app assets.
+docs/*.png
+docs/*.svg
 server/uploads/
 server/prisma/*.db
 

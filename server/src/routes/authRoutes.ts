@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { rateLimit } from 'express-rate-limit';
 import {
   forgotPassword,
+  googleLogin,
   login,
   logout,
   me,
@@ -57,6 +58,7 @@ function emailCodeLimiter() {
 }
 
 authRouter.post('/login', loginLimiter, asyncHandler(login));
+authRouter.post('/google', loginLimiter, asyncHandler(googleLogin));
 authRouter.post('/register', signupLimiter, asyncHandler(signupPassenger));
 authRouter.post('/verification/resend', emailCodeLimiter(), asyncHandler(resendEmailVerification));
 authRouter.post('/verification/confirm', emailCodeLimiter(), asyncHandler(verifyEmail));

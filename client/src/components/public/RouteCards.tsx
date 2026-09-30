@@ -7,7 +7,7 @@ import type { PublicRoutesResponse } from '../../types/public';
 import { Card, LoadingSkeleton, StatusBadge } from '../ui';
 
 function formatNextDeparture(value: string | null) {
-  if (!value) return 'Updating shortly';
+  if (!value) return 'No van in queue';
   return formatDateTime12(value, { weekday: 'short' });
 }
 
@@ -59,17 +59,14 @@ export function RouteCards() {
             <p className="mt-3 text-sm leading-6 text-text-secondary">{routeItem.summary}</p>
             <div className={`mt-5 grid gap-3 rounded-control bg-background p-3 text-xs ${routeItem.protocol === 'Goso' ? 'grid-cols-2' : 'grid-cols-1'}`}>
               <p className="flex items-start gap-2 text-text-secondary"><MapPin className="mt-0.5 h-4 w-4 shrink-0 text-primary" /><span>Destination<strong className="mt-1 block text-text-primary">{routeItem.destination}</strong></span></p>
-              {routeItem.protocol === 'Goso' ? <p className="flex items-start gap-2 text-text-secondary"><CalendarClock className="mt-0.5 h-4 w-4 shrink-0 text-primary" /><span>Next departure<strong className="mt-1 block text-text-primary">{formatNextDeparture(routeItem.nextDeparture)}</strong></span></p> : null}
+              {routeItem.protocol === 'Goso' ? <p className="flex items-start gap-2 text-text-secondary"><CalendarClock className="mt-0.5 h-4 w-4 shrink-0 text-primary" /><span>{routeItem.nextDeparture ? 'Next departure' : 'Queue status'}<strong className="mt-1 block text-text-primary">{formatNextDeparture(routeItem.nextDeparture)}</strong></span></p> : null}
             </div>
-            {routeItem.reservable ? (
-              <Link to="/passenger/book" className="mt-5 inline-flex min-h-touch w-full items-center justify-center gap-2 rounded-control bg-primary px-5 text-sm font-semibold text-text-inverse transition-colors hover:bg-primary-dark">
-                Reserve a Goa seat <ArrowRight className="h-4 w-4" />
-              </Link>
-            ) : (
-              <a href="#departures" className="mt-5 inline-flex min-h-touch w-full items-center justify-center gap-2 rounded-control border border-info px-5 text-sm font-semibold text-info transition-colors hover:bg-info-soft">
-                View Legazpi status <ArrowRight className="h-4 w-4" />
-              </a>
-            )}
+            <Link
+              to={`/?route=${routeItem.code}#departures`}
+              className={`mt-5 inline-flex min-h-touch w-full items-center justify-center gap-2 rounded-control px-5 text-sm font-semibold transition-colors ${routeItem.reservable ? 'bg-primary text-text-inverse hover:bg-primary-dark' : 'border border-info text-info hover:bg-info-soft'}`}
+            >
+              {routeItem.reservable ? 'View Goa departures' : 'View Legazpi status'} <ArrowRight className="h-4 w-4" />
+            </Link>
           </div>
         </Card>
       ))}

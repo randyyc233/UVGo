@@ -17,6 +17,10 @@ export interface LoginInput {
   password: string;
 }
 
+export interface GoogleLoginInput {
+  credential: string;
+}
+
 export interface PassengerSignupInput {
   name: string;
   email: string;

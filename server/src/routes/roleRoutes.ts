@@ -12,7 +12,6 @@ import {
   markAllNotificationsRead,
   markNotificationRead,
   notifications,
-  paymongoQrphCheckout,
   reschedule,
   searchTrips,
   tripSeats,
@@ -91,7 +90,6 @@ passengerRouter.post('/reservations/paypal/hosted', asyncHandler(createPaypalHos
 passengerRouter.post('/reservations/gcash', receiptUpload.single('receipt'), asyncHandler(createGcash));
 passengerRouter.get('/bookings', asyncHandler(bookings));
 passengerRouter.get('/bookings/:reference', asyncHandler(booking));
-passengerRouter.get('/bookings/:reference/paymongo/qrph', asyncHandler(paymongoQrphCheckout));
 passengerRouter.post('/bookings/:reference/reschedule', asyncHandler(reschedule));
 passengerRouter.get('/notifications', asyncHandler(notifications));
 passengerRouter.patch('/notifications/read-all', asyncHandler(markAllNotificationsRead));

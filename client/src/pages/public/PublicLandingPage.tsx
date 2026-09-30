@@ -47,7 +47,7 @@ export function PublicLandingPage() {
               Mas Marhay an Biyahe Pag Ready Ka!
             </h1>
             <p className="mt-5 max-w-lg text-sm leading-7 text-white/85 sm:text-base lg:text-lg">
-              Check your trip, reserve your seat, asin stay updated before you go.
+              Check your trip, reserve your seat, and stay updated before you go.
             </p>
             <div className="mt-7 flex flex-wrap gap-3 text-xs font-medium text-white/80">
               <span className="flex items-center gap-2"><MapPin className="h-4 w-4" /> Naga City East Bound Terminal</span>
@@ -122,7 +122,7 @@ export function PublicLandingPage() {
             <a href="#departures" className="inline-flex min-h-touch items-center hover:text-white">Departures</a>
             <a href="#why-uvgo" className="inline-flex min-h-touch items-center hover:text-white">Why UVGo</a>
           </nav>
-          <p className="text-xs text-white/60">Naga City East Bound Terminal · Web prototype</p>
+          <p className="text-xs text-white/60">Naga City East Bound Terminal · Web app</p>
         </div>
       </footer>
     </div>

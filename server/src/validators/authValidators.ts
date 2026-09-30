@@ -5,6 +5,10 @@ export const loginSchema = z.object({
   password: z.string().min(8, 'Password must be at least 8 characters.').max(128, 'Password must be 128 characters or fewer.'),
 });
 
+export const googleLoginSchema = z.object({
+  credential: z.string().trim().min(1, 'Google did not return a sign-in credential.').max(10_000),
+}).strict();
+
 export const passengerSignupSchema = z.object({
   name: z.string().trim().min(2, 'Full name must be at least 2 characters.').max(120, 'Full name must be 120 characters or fewer.'),
   email: z.email('Please enter a valid email address.').max(191).transform((value) => value.trim().toLowerCase()),

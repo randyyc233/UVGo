@@ -8,6 +8,7 @@ const environmentSchema = z.object({
   DATABASE_URL: z.string().min(1),
   JWT_SECRET: z.string().min(32),
   JWT_EXPIRES_IN: z.string().default('8h'),
+  GOOGLE_CLIENT_ID: z.string().trim().optional().default(''),
   GMAIL_USER: z.union([z.literal(''), z.email()]).default(''),
   GMAIL_APP_PASSWORD: z.string().optional().default('').transform((value) => value.replaceAll(' ', '')),
   EMAIL_FROM_NAME: z.string().trim().min(1).max(100).default('UVGo'),
@@ -15,11 +16,6 @@ const environmentSchema = z.object({
   PAYPAL_CLIENT_ID: z.string().optional().default(''),
   PAYPAL_CLIENT_SECRET: z.string().optional().default(''),
   PAYPAL_BASE_URL: z.url().default('https://api-m.sandbox.paypal.com'),
-  PAYMONGO_SECRET_KEY: z.string().optional().default(''),
-  PAYMONGO_PUBLIC_KEY: z.string().optional().default(''),
-  PAYMONGO_WEBHOOK_SECRET: z.string().optional().default(''),
-  PAYMONGO_BASE_URL: z.url().default('https://api.paymongo.com/v1'),
-  PAYMONGO_QR_EXPIRY_SECONDS: z.coerce.number().int().min(60).max(9_000).default(1_800),
   UPLOAD_DIR: z.string().default('uploads/receipts'),
   DEMO_MODE: z.string().default('true').transform((value) => value === 'true'),
   DISPATCH_ENGINE_INTERVAL_MS: z.coerce.number().int().min(5_000).max(300_000).default(10_000),
@@ -49,29 +45,6 @@ const environmentSchema = z.object({
     });
   }
 
-  const paymongoSecretConfigured = environment.PAYMONGO_SECRET_KEY.length > 0;
-  const paymongoPublicConfigured = environment.PAYMONGO_PUBLIC_KEY.length > 0;
-  if (paymongoSecretConfigured !== paymongoPublicConfigured) {
-    context.addIssue({
-      code: 'custom',
-      path: paymongoSecretConfigured ? ['PAYMONGO_PUBLIC_KEY'] : ['PAYMONGO_SECRET_KEY'],
-      message: 'PAYMONGO_SECRET_KEY and PAYMONGO_PUBLIC_KEY must either both be configured or both be blank.',
-    });
-  }
-
-  if (paymongoSecretConfigured && !/^sk_(test|live)_/.test(environment.PAYMONGO_SECRET_KEY)) {
-    context.addIssue({ code: 'custom', path: ['PAYMONGO_SECRET_KEY'], message: 'Use a PayMongo sk_test_ or sk_live_ secret key.' });
-  }
-  if (paymongoPublicConfigured && !/^pk_(test|live)_/.test(environment.PAYMONGO_PUBLIC_KEY)) {
-    context.addIssue({ code: 'custom', path: ['PAYMONGO_PUBLIC_KEY'], message: 'Use a PayMongo pk_test_ or pk_live_ public key.' });
-  }
-  if (paymongoSecretConfigured && paymongoPublicConfigured) {
-    const secretMode = environment.PAYMONGO_SECRET_KEY.startsWith('sk_live_') ? 'live' : 'test';
-    const publicMode = environment.PAYMONGO_PUBLIC_KEY.startsWith('pk_live_') ? 'live' : 'test';
-    if (secretMode !== publicMode) {
-      context.addIssue({ code: 'custom', path: ['PAYMONGO_PUBLIC_KEY'], message: 'PayMongo public and secret keys must use the same test/live mode.' });
-    }
-  }
 });
 
 const parsedEnvironment = environmentSchema.safeParse(process.env);

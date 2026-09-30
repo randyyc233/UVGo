@@ -116,17 +116,13 @@ export async function getPublicDepartures() {
 }
 
 export async function getPublicRoutes() {
-  const nextTrips = await prisma.trip.findMany({
-    where: {
-      status: { in: activeTripStatuses },
-      departedAt: null,
-    },
-    distinct: ['route'],
-    orderBy: { scheduledOrTriggeredTime: 'asc' },
-    select: { route: true, scheduledOrTriggeredTime: true },
-  });
-
-  const nextDepartureByRoute = new Map(nextTrips.map((trip) => [trip.route, trip.scheduledOrTriggeredTime.toISOString()]));
+  // Route-card status must describe the same live queue shown on the public
+  // departure board. An active future Trip is only a schedule; it is not a
+  // public "next departure" until its van has an operational queue entry.
+  const publicBoard = await getPublicDepartures();
+  const nextGoaDeparture = publicBoard.departures.find(
+    (departure) => departure.routeCode === 'goa' && departure.departureTime,
+  )?.departureTime ?? null;
 
   return {
     origin: NCEBT.name,
@@ -138,7 +134,7 @@ export async function getPublicRoutes() {
         protocol: 'Goso',
         reservable: true,
         fare: DEFAULT_GOA_FARE,
-        nextDeparture: nextDepartureByRoute.get(RouteCode.GOA) ?? null,
+        nextDeparture: nextGoaDeparture,
         summary: 'Scheduled departures with advance seat reservations.',
       },
       {

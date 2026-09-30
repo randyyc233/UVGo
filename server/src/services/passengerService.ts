@@ -16,13 +16,6 @@ import { prisma } from '../lib/prisma.js';
 import { AppError } from '../utils/AppError.js';
 import { toAuthenticatedUser } from './authService.js';
 import { capturePayPalOrder, createPayPalOrder } from './paypalService.js';
-import {
-  createAndAttachPaymongoQrph,
-  createPaymongoPaymentIntent,
-  retrievePaymongoPaymentIntent,
-  type PaymongoQrphCheckout,
-  type PaymongoWebhookEvent,
-} from './paymongoService.js';
 
 const activeReservationStatuses: ReservationStatus[] = [
   ReservationStatus.PENDING_PAYMENT,
@@ -153,7 +146,6 @@ export async function searchGoaTrips(date: string | undefined, passengers: numbe
         trip.vehicle.managedByDispatcher,
         routeDispatcher,
       ),
-      paymongoQrphAvailable: false,
     };
   });
 }
@@ -201,7 +193,6 @@ export async function getTripSeats(tripId: string) {
         trip.vehicle.managedByDispatcher,
         routeDispatcher,
       ),
-      paymongoQrphAvailable: false,
     },
     seats: Array.from({ length: capacity }, (_, index) => ({
       number: index + 1,
@@ -243,11 +234,6 @@ async function createReservationRecord(
     externalReferenceKey?: string;
     receiptImageKey?: string;
     receiptMimeType?: string;
-    paymongoPaymentIntentId?: string;
-    paymongoPaymentMethodId?: string;
-    paymongoPaymentId?: string;
-    paymongoClientKey?: string;
-    paymongoQrExpiresAt?: Date;
   } = {},
 ) {
   const trip = await transaction.trip.findUnique({ where: { id: input.tripId }, include: { vehicle: true } });
@@ -285,11 +271,6 @@ async function createReservationRecord(
           externalReferenceKey: paymentMetadata.externalReferenceKey,
           receiptImageKey: paymentMetadata.receiptImageKey,
           receiptMimeType: paymentMetadata.receiptMimeType,
-          paymongoPaymentIntentId: paymentMetadata.paymongoPaymentIntentId,
-          paymongoPaymentMethodId: paymentMetadata.paymongoPaymentMethodId,
-          paymongoPaymentId: paymentMetadata.paymongoPaymentId,
-          paymongoClientKey: paymentMetadata.paymongoClientKey,
-          paymongoQrExpiresAt: paymentMetadata.paymongoQrExpiresAt,
         },
       },
     },
@@ -365,109 +346,6 @@ export async function createPaypalHostedReservation(input: ReservationInput & { 
     normalizeReservationConflict(error);
   }
   return getPassengerBooking(input.passengerId, result.reservation.reference);
-}
-
-function totalToCentavos(totalAmount: number) {
-  const centavos = Math.round(totalAmount * 100);
-  if (!Number.isSafeInteger(centavos) || centavos < 100) {
-    throw new AppError(422, 'INVALID_PAYMENT_AMOUNT', 'The reservation total cannot be processed through QR Ph.');
-  }
-  return centavos;
-}
-
-function qrphCheckoutFromIntent(
-  intent: { data: { id: string; attributes: { livemode: boolean; next_action?: { code?: { image_url?: string; test_url?: string } } | null } } },
-  expiresAt: Date | null,
-): PaymongoQrphCheckout | null {
-  const qrImageUrl = intent.data.attributes.next_action?.code?.image_url;
-  if (!qrImageUrl || !/^data:image\/(?:png|jpeg|webp);base64,/i.test(qrImageUrl) || !expiresAt) return null;
-  const testUrl = intent.data.attributes.next_action?.code?.test_url;
-  return {
-    paymentIntentId: intent.data.id,
-    qrImageUrl,
-    expiresAt: expiresAt.toISOString(),
-    livemode: intent.data.attributes.livemode,
-    testUrl: testUrl && /^https:\/\//i.test(testUrl) ? testUrl : null,
-  };
-}
-
-export async function createPaymongoQrphReservation(input: ReservationInput) {
-  let created;
-  try {
-    created = await prisma.$transaction((transaction) => createReservationRecord(
-      transaction,
-      input,
-      PaymentMethod.PAYMONGO_QRPH,
-      PaymentStatus.PENDING,
-      ReservationStatus.PENDING_PAYMENT,
-    ));
-  } catch (error) {
-    normalizeReservationConflict(error);
-  }
-
-  const payment = created.reservation.payments[0];
-  if (!payment) {
-    await prisma.reservation.delete({ where: { id: created.reservation.id } }).catch(() => undefined);
-    throw new AppError(500, 'PAYMENT_NOT_CREATED', 'The QR Ph payment record was not created.');
-  }
-
-  try {
-    const passenger = await prisma.user.findUnique({
-      where: { id: input.passengerId },
-      select: { name: true, email: true, contact: true },
-    });
-    if (!passenger) throw new AppError(404, 'PASSENGER_NOT_FOUND', 'The passenger account could not be found.');
-
-    const intent = await createPaymongoPaymentIntent({
-      amountCentavos: totalToCentavos(created.totalAmount),
-      reservationReference: created.reservation.reference,
-      idempotencyKey: `uvgo-qrph-intent-${payment.id}`,
-    });
-    await prisma.payment.update({
-      where: { id: payment.id },
-      data: {
-        paymongoPaymentIntentId: intent.data.id,
-        paymongoClientKey: intent.data.attributes.client_key,
-      },
-    });
-
-    const attached = await createAndAttachPaymongoQrph({
-      paymentIntentId: intent.data.id,
-      clientKey: intent.data.attributes.client_key,
-      paymentRecordId: payment.id,
-      billing: {
-        name: passenger.name,
-        email: passenger.email,
-        phone: passenger.contact ?? input.contact,
-      },
-    });
-    const expiresAt = new Date(attached.checkout.expiresAt);
-    await prisma.$transaction([
-      prisma.payment.update({
-        where: { id: payment.id },
-        data: {
-          paymongoPaymentMethodId: attached.paymentMethodId,
-          paymongoQrExpiresAt: expiresAt,
-        },
-      }),
-      prisma.notification.create({
-        data: {
-          userId: input.passengerId,
-          type: NotificationType.PAYMENT,
-          message: `QR Ph payment is ready for ${created.reservation.reference}. Scan and pay before ${expiresAt.toLocaleString('en-PH', { timeZone: 'Asia/Manila', dateStyle: 'medium', timeStyle: 'short', hour12: true })}.`,
-        },
-      }),
-    ]);
-    return {
-      booking: await getPassengerBooking(input.passengerId, created.reservation.reference),
-      checkout: attached.checkout,
-    };
-  } catch (error) {
-    // A QR was never delivered to the passenger, so release the seat hold. Any
-    // remote intent created before the failure is unreachable and cannot be paid.
-    await prisma.reservation.delete({ where: { id: created.reservation.id } }).catch(() => undefined);
-    throw error;
-  }
 }
 
 export async function createPaypalReservation(input: ReservationInput) {
@@ -578,14 +456,15 @@ function serializeBooking(
     payment: payment ? {
       method: payment.method === PaymentMethod.PAYPAL
         ? 'paypal'
-        : payment.method === PaymentMethod.PAYMONGO_QRPH
-          ? 'paymongo_qrph'
-          : 'gcash',
+        : payment.method === PaymentMethod.GCASH_RECEIPT
+          ? 'gcash'
+          : 'legacy',
       status: payment.status.toLowerCase(),
-      transactionReference: payment.paymongoPaymentId ?? payment.paymongoPaymentIntentId ?? payment.paypalOrderId ?? payment.gcashReference,
+      transactionReference: payment.paypalOrderId
+        ?? payment.gcashReference
+        ?? (payment.method === PaymentMethod.LEGACY ? payment.externalReferenceKey?.replace(/^LEGACY:/, '') : null),
       gcashReference: payment.gcashReference,
       rejectionReason: payment.rejectionReason,
-      qrExpiresAt: payment.paymongoQrExpiresAt?.toISOString() ?? null,
     } : null,
     gcashRecipient: gcashRecipient(
       booking.trip.route,
@@ -618,162 +497,6 @@ export async function getPassengerBooking(passengerId: string, reference: string
   ]);
   if (!booking) throw new AppError(404, 'BOOKING_NOT_FOUND', 'This booking could not be found.');
   return serializeBooking(booking, routeDispatcher);
-}
-
-async function completePaymongoQrphPayment(input: {
-  paymentIntentId: string;
-  paymentId?: string;
-  amountCentavos: number;
-  currency: string;
-  paidAt?: Date;
-}) {
-  const payment = await prisma.payment.findUnique({
-    where: { paymongoPaymentIntentId: input.paymentIntentId },
-    include: { reservation: true },
-  });
-  if (!payment || payment.method !== PaymentMethod.PAYMONGO_QRPH) return false;
-
-  const expectedCentavos = totalToCentavos(Number(payment.amount));
-  if (input.currency !== 'PHP' || input.amountCentavos !== expectedCentavos) {
-    throw new AppError(409, 'PAYMONGO_PAYMENT_MISMATCH', 'The PayMongo payment amount or currency does not match the UVGo reservation.');
-  }
-
-  return prisma.$transaction(async (transaction) => {
-    const updated = await transaction.payment.updateMany({
-      where: { id: payment.id, method: PaymentMethod.PAYMONGO_QRPH, status: PaymentStatus.PENDING },
-      data: {
-        status: PaymentStatus.CAPTURED,
-        paidAt: input.paidAt ?? new Date(),
-        paymongoPaymentId: input.paymentId ?? payment.paymongoPaymentId,
-      },
-    });
-    if (!updated.count) return false;
-
-    await transaction.reservation.update({
-      where: { id: payment.reservationId },
-      data: { status: ReservationStatus.CONFIRMED },
-    });
-    await transaction.notification.create({
-      data: {
-        userId: payment.reservation.passengerId,
-        type: NotificationType.BOOKING,
-        message: `QR Ph payment received. Your Goa booking ${payment.reservation.reference} is confirmed. Bring a valid ID and your reservation reference to the terminal.`,
-      },
-    });
-    return true;
-  });
-}
-
-async function failPaymongoQrphPayment(input: { paymentIntentId?: string; paymentMethodId?: string }, reason: string) {
-  if (!input.paymentIntentId && !input.paymentMethodId) return false;
-  const payment = await prisma.payment.findFirst({
-    where: {
-      method: PaymentMethod.PAYMONGO_QRPH,
-      OR: [
-        ...(input.paymentIntentId ? [{ paymongoPaymentIntentId: input.paymentIntentId }] : []),
-        ...(input.paymentMethodId ? [{ paymongoPaymentMethodId: input.paymentMethodId }] : []),
-      ],
-    },
-    include: { reservation: true },
-  });
-  if (!payment) return false;
-
-  return prisma.$transaction(async (transaction) => {
-    const updated = await transaction.payment.updateMany({
-      where: { id: payment.id, status: PaymentStatus.PENDING },
-      data: { status: PaymentStatus.FAILED, rejectionReason: reason },
-    });
-    if (!updated.count) return false;
-    await transaction.reservation.update({ where: { id: payment.reservationId }, data: { status: ReservationStatus.FORFEITED } });
-    await transaction.notification.create({
-      data: {
-        userId: payment.reservation.passengerId,
-        type: NotificationType.PAYMENT,
-        message: `QR Ph payment for ${payment.reservation.reference} ${reason.toLowerCase()} The held seats were released; start a new booking to try again.`,
-      },
-    });
-    return true;
-  });
-}
-
-export async function getPaymongoQrphCheckout(passengerId: string, reference: string) {
-  const payment = await prisma.payment.findFirst({
-    where: {
-      method: PaymentMethod.PAYMONGO_QRPH,
-      reservation: { passengerId, reference },
-    },
-    include: { reservation: true },
-  });
-  if (!payment?.paymongoPaymentIntentId) throw new AppError(404, 'QRPH_PAYMENT_NOT_FOUND', 'This QR Ph payment could not be found.');
-
-  let checkout: PaymongoQrphCheckout | null = null;
-  if (payment.status === PaymentStatus.PENDING) {
-    const intent = await retrievePaymongoPaymentIntent(payment.paymongoPaymentIntentId);
-    if (intent.data.attributes.status === 'succeeded') {
-      const paidPayment = intent.data.attributes.payments?.find((item) => item.attributes.status === 'paid')
-        ?? intent.data.attributes.payments?.at(-1);
-      await completePaymongoQrphPayment({
-        paymentIntentId: intent.data.id,
-        paymentId: paidPayment?.id,
-        amountCentavos: intent.data.attributes.amount,
-        currency: intent.data.attributes.currency,
-        paidAt: paidPayment?.attributes.paid_at ? new Date(paidPayment.attributes.paid_at * 1_000) : new Date(),
-      });
-    } else if (payment.paymongoQrExpiresAt && payment.paymongoQrExpiresAt <= new Date()) {
-      await failPaymongoQrphPayment(
-        { paymentIntentId: payment.paymongoPaymentIntentId, paymentMethodId: payment.paymongoPaymentMethodId ?? undefined },
-        'expired before it was completed.',
-      );
-    } else {
-      checkout = qrphCheckoutFromIntent(intent, payment.paymongoQrExpiresAt);
-    }
-  }
-
-  return {
-    booking: await getPassengerBooking(passengerId, reference),
-    checkout,
-  };
-}
-
-export async function processPaymongoWebhookEvent(event: PaymongoWebhookEvent) {
-  const eventType = event.data.attributes.type;
-  const resource = event.data.attributes.data;
-  const attributes = resource.attributes;
-  const paymentIntentId = typeof attributes.payment_intent_id === 'string'
-    ? attributes.payment_intent_id
-    : typeof (attributes.payment_intent as { id?: unknown } | undefined)?.id === 'string'
-      ? String((attributes.payment_intent as { id: string }).id)
-      : undefined;
-
-  if (eventType === 'payment.paid' && paymentIntentId) {
-    const amount = attributes.amount;
-    const currency = attributes.currency;
-    const status = attributes.status;
-    if (typeof amount !== 'number' || typeof currency !== 'string' || status !== 'paid') return;
-    await completePaymongoQrphPayment({
-      paymentIntentId,
-      paymentId: resource.id,
-      amountCentavos: amount,
-      currency,
-      paidAt: typeof attributes.paid_at === 'number' ? new Date(attributes.paid_at * 1_000) : new Date(),
-    });
-    return;
-  }
-
-  if (eventType === 'payment.failed') {
-    await failPaymongoQrphPayment(
-      { paymentIntentId, paymentMethodId: resource.type === 'payment_method' ? resource.id : undefined },
-      'failed before it was completed.',
-    );
-    return;
-  }
-
-  if (eventType === 'qrph.expired') {
-    await failPaymongoQrphPayment(
-      { paymentIntentId, paymentMethodId: resource.id },
-      'expired before it was completed.',
-    );
-  }
 }
 
 export async function reschedulePassengerBooking(passengerId: string, reference: string, tripId: string, seats: number[]) {

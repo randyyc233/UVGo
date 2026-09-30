@@ -19,10 +19,8 @@ Protected-route login preserves the requested passenger URL, so a signed-out pas
 - `GET /api/passenger/trips/:tripId/seats`
 - `POST /api/passenger/reservations/paypal/hosted` (dashboard-button payment, dispatcher-verified)
 - `POST /api/passenger/reservations/gcash` using `multipart/form-data`
-- `POST /api/passenger/reservations/paymongo/qrph` (dynamic QR Ph checkout)
 - `GET /api/passenger/bookings`
 - `GET /api/passenger/bookings/:reference`
-- `GET /api/passenger/bookings/:reference/paymongo/qrph` (QR/status recovery)
 - `POST /api/passenger/bookings/:reference/reschedule`
 - `GET /api/passenger/notifications`
 
@@ -66,26 +64,9 @@ The selector uses the supplied `top view of van for seat selection overlay.png` 
 
 ## Payment choices
 
-New passenger bookings offer GCash receipt verification, the merchant-supplied PayPal button,
-and PayMongo dynamic QR Ph. There is no PayPal SDK, Orders-v2, card-button, or alternate PayPal
-checkout in the public booking flow.
-
-### PayMongo QR Ph
-
-The server calculates the reservation total from `Trip.fareAmount × seat count`, creates the
-reservation as `PENDING_PAYMENT`, and creates one PayMongo Payment Intent per reservation. It then
-creates and attaches a single-use `qrph` Payment Method and returns the Base64 QR image. The QR is
-amount-specific and expires after 30 minutes by default. The PayMongo secret key and webhook
-signing secret never reach the browser.
-
-The public webhook endpoint is `POST /api/webhooks/paymongo`. Configure separate test/live
-PayMongo webhook endpoints for `payment.paid`, `payment.failed`, and `qrph.expired`, and save the
-endpoint signing secret as `PAYMONGO_WEBHOOK_SECRET`. The handler verifies `Paymongo-Signature`
-against the exact raw body before touching the database. Successful events confirm the booking
-and captured payment atomically and idempotently. Failed or expired attempts forfeit the unpaid
-reservation and release its seats. The authenticated status endpoint retrieves the Payment Intent
-as a webhook-delay recovery path; neither the displayed QR nor a browser response is proof of
-payment.
+New passenger bookings offer GCash receipt verification and the merchant-supplied PayPal button.
+There is no PayPal SDK, Orders-v2, card-button, or alternate PayPal checkout in the public booking
+flow.
 
 ### GCash
 

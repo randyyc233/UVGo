@@ -29,8 +29,8 @@ export function BookingSearchCard() {
     >
       <div className="mb-4 flex items-center justify-between border-b border-border pb-3">
         <div>
-          <p className="text-sm font-bold text-primary-dark">Reserve a Goa seat</p>
-          <p className="mt-0.5 text-xs text-text-secondary">Terminal-to-terminal · One way</p>
+          <p className="text-sm font-bold text-primary-dark">Reserve a seat</p>
+          <p className="text-xs text-text-secondary">Search for available trips</p>
         </div>
         <span className="rounded-pill bg-primary-soft px-3 py-1 text-xs font-semibold text-primary">Goa only</span>
       </div>
@@ -76,9 +76,6 @@ export function BookingSearchCard() {
           Search trips
         </Button>
       </div>
-      <p className="mt-3 text-xs text-text-secondary">
-        Legazpi operates through Taya loading and is available on the departure board as status-only.
-      </p>
     </form>
   );
 }

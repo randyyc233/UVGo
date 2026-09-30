@@ -1,10 +1,11 @@
 import { createContext, useContext } from 'react';
-import type { AuthUser, EmailVerificationInput, LoginInput, PassengerSignupInput, PassengerSignupResult } from './authTypes';
+import type { AuthUser, EmailVerificationInput, GoogleLoginInput, LoginInput, PassengerSignupInput, PassengerSignupResult } from './authTypes';
 
 export interface AuthContextValue {
   user: AuthUser | null;
   loading: boolean;
   login: (input: LoginInput) => Promise<AuthUser>;
+  googleLogin: (input: GoogleLoginInput) => Promise<AuthUser>;
   signupPassenger: (input: PassengerSignupInput) => Promise<PassengerSignupResult>;
   verifyEmail: (input: EmailVerificationInput) => Promise<AuthUser>;
   logout: () => Promise<void>;

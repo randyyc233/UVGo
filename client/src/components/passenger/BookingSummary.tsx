@@ -6,7 +6,7 @@ import { Card } from '../ui';
 interface BookingSummaryProps {
   trip: GoaTrip;
   seats: number[];
-  paymentMethod?: 'paypal' | 'gcash' | 'paymongo_qrph';
+  paymentMethod?: 'paypal' | 'gcash';
   compact?: boolean;
   passengerCount?: number;
 }
@@ -16,7 +16,6 @@ const money = new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP
 const paymentLabels = {
   paypal: 'PayPal — dispatcher verification',
   gcash: 'GCash — receipt verification',
-  paymongo_qrph: 'QR Ph — secure PayMongo payment',
 } as const;
 
 function scheduleDate(value: string) {

@@ -18,8 +18,6 @@ export interface GoaTrip {
   canFitParty: boolean;
   /** Route dispatcher's GCash account for this reservation. */
   gcashRecipient: GcashRecipient | null;
-  /** Whether server keys and a verified PayMongo webhook are configured. */
-  paymongoQrphAvailable: boolean;
 }
 
 export interface TripSeat {
@@ -44,27 +42,18 @@ export interface PassengerBooking {
   totalAmount: number;
   status: string;
   payment: null | {
-    method: 'paypal' | 'gcash' | 'paymongo_qrph';
+    method: 'paypal' | 'gcash' | 'legacy';
     status: string;
     /** PayPal transaction/order ID or the GCash receipt reference. */
     transactionReference: string | null;
     gcashReference: string | null;
     rejectionReason: string | null;
-    qrExpiresAt: string | null;
   };
   /** Route dispatcher's GCash account used for this reservation. */
   gcashRecipient: GcashRecipient | null;
   canReschedule: boolean;
   rescheduleMessage: string;
   createdAt: string;
-}
-
-export interface PaymongoQrphCheckout {
-  paymentIntentId: string;
-  qrImageUrl: string;
-  expiresAt: string;
-  livemode: boolean;
-  testUrl: string | null;
 }
 
 export interface PassengerNotification {

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { apiRequest } from '../api/http';
-import type { AuthUser, EmailVerificationInput, LoginInput, PassengerSignupInput, PassengerSignupResult } from './authTypes';
+import type { AuthUser, EmailVerificationInput, GoogleLoginInput, LoginInput, PassengerSignupInput, PassengerSignupResult } from './authTypes';
 import { AuthContext } from './authContext';
 
 export function AuthProvider({ children }: { children: ReactNode }) {
@@ -46,6 +46,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return response.user;
   }, []);
 
+  const googleLogin = useCallback(async (input: GoogleLoginInput) => {
+    const response = await apiRequest<{ user: AuthUser }>('/auth/google', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    });
+    setUser(response.user);
+    return response.user;
+  }, []);
+
   const signupPassenger = useCallback(async (input: PassengerSignupInput) => {
     return apiRequest<PassengerSignupResult>('/auth/register', {
       method: 'POST',
@@ -71,8 +80,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const value = useMemo(
-    () => ({ user, loading, login, signupPassenger, verifyEmail, logout, refresh }),
-    [loading, login, logout, refresh, signupPassenger, user, verifyEmail],
+    () => ({ user, loading, login, googleLogin, signupPassenger, verifyEmail, logout, refresh }),
+    [googleLogin, loading, login, logout, refresh, signupPassenger, user, verifyEmail],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
