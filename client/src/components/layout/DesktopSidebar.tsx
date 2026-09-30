@@ -12,12 +12,12 @@ interface DesktopSidebarProps {
 
 export function DesktopSidebar({ items, roleLabel, onLogout }: DesktopSidebarProps) {
   return (
-    <aside className="fixed inset-y-0 left-0 z-30 hidden w-60 flex-col border-r border-border bg-surface px-4 py-6 lg:flex">
-      <div className="px-2">
+    <aside className="dashboard-sidebar fixed inset-y-0 left-0 z-30 hidden w-64 flex-col border-r border-border bg-surface px-4 py-6 lg:flex">
+      <div className="border-b border-border px-3 pb-6">
         <Logo />
-        <p className="mt-3 text-xs font-medium text-text-secondary">{roleLabel}</p>
+        <p className="mt-4 text-xs font-medium leading-5 text-text-secondary">{roleLabel}</p>
       </div>
-      <nav className="mt-7 flex flex-1 flex-col gap-1" aria-label={`${roleLabel} navigation`}>
+      <nav className="mt-5 flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto pb-5" aria-label={`${roleLabel} navigation`}>
         {items.map((item) => {
           const Icon = item.icon;
 
@@ -27,9 +27,9 @@ export function DesktopSidebar({ items, roleLabel, onLogout }: DesktopSidebarPro
               to={item.href}
               className={({ isActive }) =>
                 cn(
-                  'flex min-h-touch items-center gap-3 rounded-control px-3 py-2 text-sm font-medium transition-colors',
+                  'dashboard-nav-link flex min-h-touch shrink-0 items-center gap-3 rounded-control px-3 py-2.5 text-sm font-medium transition-colors',
                   isActive
-                    ? 'bg-primary-dark text-text-inverse shadow-sm'
+                    ? 'bg-primary-soft text-primary-dark'
                     : 'text-text-secondary hover:bg-primary-soft hover:text-primary-dark',
                 )
               }
@@ -53,7 +53,7 @@ export function DesktopSidebar({ items, roleLabel, onLogout }: DesktopSidebarPro
           <span>Sign out</span>
         </button>
       </nav>
-      <div className="rounded-card border border-border bg-background p-3">
+      <div className="shrink-0 rounded-card border border-border bg-background p-4">
         <div className="flex items-center gap-2 text-sm font-semibold text-text-primary">
           <Headphones className="h-4 w-4 text-primary" aria-hidden="true" />
           Need help?

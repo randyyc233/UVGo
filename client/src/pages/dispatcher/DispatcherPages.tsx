@@ -20,7 +20,6 @@ import {
   ShieldCheck,
   Trash2,
   UserRound,
-  UsersRound,
   UserRoundCog,
   WalletCards,
   X,
@@ -40,7 +39,6 @@ import {
   EmptyState,
   Input,
   LoadingSkeleton,
-  MetricCard,
   Select,
   StatusBadge,
   Tabs,
@@ -206,11 +204,6 @@ export function DispatcherDashboardPage() {
       icon: <Route className="h-5 w-5" />,
     },
     {
-      label: "Passengers Waiting",
-      value: dashboard.metrics.passengersWaiting,
-      icon: <UsersRound className="h-5 w-5" />,
-    },
-    {
       label: "Pending payments",
       value: dashboard.metrics.pendingPayments,
       icon: <WalletCards className="h-5 w-5" />,
@@ -222,29 +215,30 @@ export function DispatcherDashboardPage() {
     },
   ];
   return (
-    <div className="space-y-4">
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
+    <div className="dispatcher-dashboard space-y-5 lg:space-y-6">
+      <div className="dashboard-summary" aria-label="Current terminal status">
         {metrics.map((metric) => (
-          <MetricCard
-            key={metric.label}
-            label={metric.label}
-            value={metric.value}
-            icon={metric.icon}
-          />
+          <div key={metric.label} className="dashboard-summary-item">
+            <span className="dashboard-summary-icon" aria-hidden="true">{metric.icon}</span>
+            <div className="min-w-0">
+              <p className="text-xs font-medium leading-5 text-text-secondary">{metric.label}</p>
+              <p className="text-xl font-bold tabular-nums tracking-tight">{metric.value}</p>
+            </div>
+          </div>
         ))}
       </div>
-      <div className="grid gap-4 xl:grid-cols-[1.45fr_0.75fr]">
-        <Card padded={false} className="hidden min-h-[32rem] overflow-hidden md:flex md:flex-col">
-          <div className="flex shrink-0 items-center justify-between border-b border-border px-5 py-4">
+      <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,1.45fr)_minmax(0,0.85fr)] lg:gap-6">
+        <Card padded={false} className="hidden min-h-[34rem] overflow-hidden md:flex md:flex-col">
+          <div className="dashboard-panel-heading flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-border px-5 py-5">
             <div>
-              <h2 className="font-extrabold">Live fleet & Active Zone</h2>
+              <h2 className="text-base font-semibold">Live fleet & Active Zone</h2>
               <p className="mt-1 text-xs text-text-secondary">
                 Current operational state · 8-second refresh
               </p>
             </div>
             <Link
               to="/dispatcher/fleet"
-              className="text-sm font-bold text-primary"
+              className="dashboard-text-link text-sm font-semibold text-primary"
             >
               Open fleet map
             </Link>
@@ -255,12 +249,15 @@ export function DispatcherDashboardPage() {
             <LoadingSkeleton lines={5} className="m-5 flex-1" />
           )}
         </Card>
-        <div className="space-y-4">
+        <div className="min-w-0 space-y-5 lg:space-y-6">
           <Card className="p-5">
             <div className="flex items-center justify-between">
-              <h2 className="font-extrabold">Live alerts</h2>
+              <h2 className="text-base font-semibold">Live alerts</h2>
               <BellRing className="h-5 w-5 text-primary" />
             </div>
+            <p className="mt-1 text-xs text-text-secondary">
+              Replacement alerts cover today’s departures. A departure can need a van even when the queue is empty.
+            </p>
             <div className="mt-3 divide-y divide-border">
               {dashboard.alerts.length ? (
                 dashboard.alerts.map((alert) => (
@@ -288,19 +285,25 @@ export function DispatcherDashboardPage() {
           </Card>
           <Card className="p-5">
             <div className="flex items-center justify-between">
-              <h2 className="font-extrabold">Next departures</h2>
+              <h2 className="text-base font-semibold">Next departures</h2>
               <Link
                 to="/dispatcher/queue"
-                className="text-xs font-bold text-primary"
+                className="dashboard-text-link text-xs font-semibold text-primary"
               >
                 View queue
               </Link>
             </div>
+            <p className="mt-1 text-xs text-text-secondary">Today’s queue, in queue order</p>
             <div className="mt-3 divide-y divide-border">
+              {!dashboard.departures.length && (
+                <p className="py-8 text-center text-sm text-text-secondary">
+                  No departures in today’s queue.
+                </p>
+              )}
               {dashboard.departures.slice(0, 4).map((trip) => (
                 <div
                   key={trip.id}
-                  className="flex items-center justify-between gap-3 py-3"
+                  className="flex flex-wrap items-center justify-between gap-3 py-4"
                 >
                   <div>
                     <p className="text-sm font-bold">
@@ -311,7 +314,7 @@ export function DispatcherDashboardPage() {
                     </p>
                   </div>
                   <StatusBadge tone={tone(trip.status)}>
-                    {label(trip.status)}
+                    {queueStatusLabel(trip.status)}
                   </StatusBadge>
                 </div>
               ))}
@@ -321,15 +324,15 @@ export function DispatcherDashboardPage() {
       </div>
       <Card className="p-5">
         <div className="flex items-center justify-between">
-          <h2 className="font-extrabold">Terminal activity</h2>
+          <h2 className="text-base font-semibold">Terminal activity</h2>
           <span className="flex items-center gap-1 text-xs text-success">
             <span className="h-2 w-2 rounded-full bg-success" />
             Live feed
           </span>
         </div>
-        <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+        <div className="dashboard-activity mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
           {dashboard.activity.map((item) => (
-            <div key={item.id} className="rounded-control bg-cream p-3">
+            <div key={item.id} className="rounded-control border border-border bg-background p-4">
               <p className="text-sm font-bold">{label(item.title)}</p>
               <p className="mt-1 text-xs text-text-secondary">{item.detail}</p>
               <p className="mt-2 text-[0.65rem] text-text-muted">
@@ -713,7 +716,7 @@ export function DispatcherQueuePage() {
           </div>
         ) : (
           <>
-            <div className="mt-4 hidden overflow-x-auto lg:block">
+            <div className="mt-4 hidden overflow-x-auto xl:block">
               <table className="w-full min-w-[56rem] text-left text-sm">
                 <thead>
                   <tr className="border-b border-border text-xs text-text-secondary">
@@ -740,7 +743,7 @@ export function DispatcherQueuePage() {
                 </tbody>
               </table>
             </div>
-            <div className="mt-4 space-y-3 lg:hidden">
+            <div className="mt-4 space-y-3 xl:hidden">
               {entries.map((entry) => (
                 <QueueMobileCard
                   key={entry.id}
@@ -847,7 +850,7 @@ function PassengerStepper({
     <div className="inline-flex items-center gap-1.5" aria-label={`Passengers aboard ${entry.vanId}`}>
       <button
         type="button"
-        className="flex h-9 w-9 items-center justify-center rounded-control border border-border-strong bg-surface text-primary-dark transition-colors hover:bg-primary-soft disabled:cursor-not-allowed disabled:opacity-40"
+        className="flex h-11 w-11 shrink-0 items-center justify-center rounded-control border border-border-strong bg-surface text-primary-dark transition-colors hover:bg-primary-soft disabled:cursor-not-allowed disabled:opacity-40"
         disabled={disabled || entry.occupancy <= 0}
         onClick={() => onChange(entry, -1)}
         aria-label={`Remove one passenger from ${entry.vanId}`}
@@ -858,7 +861,7 @@ function PassengerStepper({
       <strong className="min-w-12 text-center text-sm" aria-live="polite">{entry.occupancy}/{entry.capacity}</strong>
       <button
         type="button"
-        className="flex h-9 w-9 items-center justify-center rounded-control border border-primary bg-primary text-text-inverse transition-colors hover:bg-primary-dark disabled:cursor-not-allowed disabled:opacity-40"
+        className="flex h-11 w-11 shrink-0 items-center justify-center rounded-control border border-primary bg-primary text-text-inverse transition-colors hover:bg-primary-dark disabled:cursor-not-allowed disabled:opacity-40"
         disabled={disabled || entry.occupancy >= entry.capacity}
         onClick={() => onChange(entry, 1)}
         aria-label={`Add one passenger to ${entry.vanId}`}
@@ -949,7 +952,7 @@ function QueueMobileCard({
 
   return (
     <article className="rounded-card border border-border bg-surface p-3 shadow-sm sm:p-4">
-      <div className="flex items-start justify-between gap-3">
+      <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="flex min-w-0 items-center gap-3">
           <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary-soft font-black text-primary-dark">
             {entry.position}
@@ -961,15 +964,15 @@ function QueueMobileCard({
         </div>
         <span className="shrink-0"><StatusBadge tone={entry.isLate ? "danger" : tone(entry.status)}>{entry.isLate ? "Late" : queueStatusLabel(entry.status)}</StatusBadge></span>
       </div>
-      <div className={`mt-3 items-end gap-3 text-xs ${isGoa ? "grid grid-cols-[minmax(0,1fr)_auto]" : "flex justify-end"}`}>
+      <div className={`mt-3 items-end gap-3 text-xs ${isGoa ? "grid grid-cols-1 min-[420px]:grid-cols-[minmax(0,1fr)_auto]" : "flex justify-end"}`}>
         {isGoa ? (
           <div className="min-w-0">
             <p className="text-text-muted">Loading / Departure</p>
-            <p className="mt-0.5 truncate font-semibold text-text-primary">Loading {entry.scheduledLoadingTime ? formatTime12(entry.scheduledLoadingTime) : "not scheduled"}</p>
-            <p className="mt-0.5 truncate text-text-muted">Departure {entry.departureTime ? formatTime12(entry.departureTime) : "not scheduled"}</p>
+            <p className="mt-0.5 font-semibold text-text-primary">Loading {entry.scheduledLoadingTime ? formatTime12(entry.scheduledLoadingTime) : "not scheduled"}</p>
+            <p className="mt-0.5 text-text-muted">Departure {entry.departureTime ? formatTime12(entry.departureTime) : "not scheduled"}</p>
           </div>
         ) : null}
-        <div className="text-right">
+        <div className="flex items-center justify-between gap-3 min-[420px]:block min-[420px]:text-right">
           <p className="text-text-muted">Occupancy</p>
           <div className="mt-1"><PassengerStepper entry={entry} loading={loading || updatingPassengers} onChange={adjustPassengerCount} /></div>
         </div>
@@ -1203,6 +1206,7 @@ function PaymentCard({
         </div>
       ) : (
         <div className="mt-4 space-y-2 rounded-control bg-cream p-3 text-sm text-text-secondary">
+          {payment.receiptUrl ? <img src={payment.receiptUrl} alt={`PayPal receipt for ${payment.reservation.reference}`} className="max-h-64 w-full rounded-control bg-white object-contain" /> : null}
           <p className="break-all"><strong className="text-text-primary">Transaction ID/reference:</strong>{" "}{payment.transactionReference || "Not supplied"}</p>
           <p><strong className="text-text-primary">Contact:</strong>{" "}{payment.reservation.contact ?? "Not supplied"}</p>
           <p>Manually check this payment in the merchant’s PayPal account. A passenger-supplied reference alone is not proof of payment.</p>
@@ -1402,7 +1406,7 @@ export function DispatcherAlertsPage() {
       ) : null}
       <Card className="p-4 sm:p-6">
         <div className="flex items-start justify-between gap-4 border-b border-border pb-4">
-          <div>
+          <div className="min-w-0 flex-1">
             <h2 className="font-extrabold">Send a driver announcement</h2>
             <p className="mt-1 text-sm leading-6 text-text-secondary">
               Create an alert for one driver or everyone you manage. It will appear on their dashboard automatically.
@@ -1449,7 +1453,7 @@ export function DispatcherAlertsPage() {
             />
             {announcementError ? <p id="driver-announcement-error" role="alert" className="mt-1.5 text-xs text-danger">{announcementError}</p> : null}
           </div>
-          <div className="flex justify-end">
+          <div className="dashboard-actions dashboard-actions-end">
             <Button
               type="submit"
               loading={sending}
@@ -1469,9 +1473,10 @@ export function DispatcherAlertsPage() {
               Payment, vehicle, and driver-response items for the {dashboard.route} route. Updated every 8 seconds.
             </p>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex w-full items-center gap-2 sm:w-auto">
             {dashboard.alerts.length ? (
               <Button
+                className="flex-1 sm:flex-none"
                 size="sm"
                 variant="danger"
                 disabled={Boolean(markingAlertId) || deletingAllAlerts}
@@ -1499,7 +1504,7 @@ export function DispatcherAlertsPage() {
                 tone={alert.tone === "danger" ? "danger" : alert.tone === "warning" ? "warning" : "info"}
                 read={alert.isRead}
                 action={(
-                  <div className="flex flex-wrap items-center gap-1">
+                  <div className="dashboard-actions">
                     {alert.isRead ? (
                       <span className="inline-flex items-center gap-1 text-xs font-semibold text-text-muted"><Check className="h-3.5 w-3.5" aria-hidden="true" />Read</span>
                     ) : (
@@ -1619,14 +1624,14 @@ export function DispatcherLogsPage() {
     );
   return (
     <Card className="p-4 sm:p-5">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+      <div className="dashboard-page-toolbar flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <p className="text-xs font-bold uppercase tracking-[0.12em] text-primary">
             Audit trail
           </p>
           <h2 className="mt-1 text-xl font-black">Dispatch logs</h2>
         </div>
-        <div className="flex w-full flex-col gap-2 sm:max-w-lg sm:flex-row sm:items-end sm:justify-end">
+        <div className="dashboard-inline-form flex w-full flex-col gap-2 sm:max-w-lg sm:flex-row sm:items-end sm:justify-end">
           <div className="w-full sm:max-w-sm">
             <Input
               label="Filter logs"

@@ -101,10 +101,10 @@ export function AppShell({ role, title, userName, children, hideMobileHeading = 
   }, [role]);
 
   return (
-    <div className="min-h-screen bg-background text-text-primary">
+    <div className="dashboard-shell min-h-screen bg-background text-text-primary">
       <a href="#main-content" className="skip-link">Skip to main content</a>
       <DesktopSidebar items={navigationItems} roleLabel={roleLabel} onLogout={() => void logout()} />
-      <div className="min-h-screen lg:pl-60">
+      <div className="min-h-screen min-w-0 lg:pl-64">
         <TopNavigation
           title={title}
           role={role}
@@ -114,11 +114,11 @@ export function AppShell({ role, title, userName, children, hideMobileHeading = 
           menuOpen={menuOpen}
           onMenuClick={() => setMenuOpen(true)}
         />
-        <main id="main-content" tabIndex={-1} className={`mx-auto w-full max-w-app px-4 pb-6 sm:px-6 lg:px-8 lg:pb-10 lg:pt-7 ${hideMobileHeading ? 'pt-0' : 'pt-5'}`}>
+        <main id="main-content" tabIndex={-1} className={`dashboard-content mx-auto w-full max-w-app px-4 pb-8 sm:px-6 lg:px-8 lg:pb-10 lg:pt-8 ${hideMobileHeading ? 'pt-0' : 'pt-5'}`}>
           {hideMobileHeading ? null : (
             <div className="mb-5 lg:hidden">
               {role === 'dispatcher' ? null : <p className="text-xs font-semibold uppercase tracking-[0.12em] text-primary">{roleLabel}</p>}
-              <h1 className={role === 'dispatcher' ? 'text-2xl font-extrabold tracking-tight' : 'mt-1 text-2xl font-extrabold tracking-tight'}>{title}</h1>
+              <h1 className={role === 'dispatcher' ? 'text-2xl font-bold tracking-tight' : 'mt-1 text-2xl font-bold tracking-tight'}>{title}</h1>
             </div>
           )}
           {children}

@@ -162,7 +162,7 @@ export function DispatcherProfilePage() {
             <Input label="Email address" type="email" value={email} maxLength={191} autoComplete="email" error={accountErrors.email} onChange={(event) => { setEmail(event.target.value); setAccountErrors((current) => ({ ...current, email: undefined })); setAccountError(null); }} leadingIcon={<Mail className="h-4 w-4" />} hint="This is the email you use to sign in." />
             <Input label="Phone number" type="tel" value={contact} maxLength={32} autoComplete="tel" error={accountErrors.contact} onChange={(event) => { setContact(event.target.value); setAccountErrors((current) => ({ ...current, contact: undefined })); setAccountError(null); }} leadingIcon={<Phone className="h-4 w-4" />} />
             {accountError ? <p role="alert" className="rounded-control bg-danger-soft p-3 text-sm font-semibold text-danger">{accountError}</p> : null}
-            <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end"><Button type="button" variant="ghost" disabled={!accountChanged || accountSaving} onClick={resetAccountForm}>Discard changes</Button><Button type="submit" loading={accountSaving} disabled={!accountChanged} leadingIcon={<Save className="h-4 w-4" />}>Save profile</Button></div>
+            <div className="dashboard-form-actions flex flex-col-reverse gap-2 sm:flex-row sm:flex-wrap sm:justify-end"><Button type="button" variant="ghost" disabled={!accountChanged || accountSaving} onClick={resetAccountForm}>Discard changes</Button><Button type="submit" loading={accountSaving} disabled={!accountChanged} leadingIcon={<Save className="h-4 w-4" />}>Save profile</Button></div>
           </form>
         </Card>
 

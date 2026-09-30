@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import {
   ArrowLeft,
   ArrowRight,
@@ -88,6 +88,8 @@ export function PassengerBookingPage() {
   const [gcashReference, setGcashReference] = useState('');
   const [receipt, setReceipt] = useState<File | null>(null);
   const [paypalReference, setPaypalReference] = useState('');
+  const [paypalReceipt, setPaypalReceipt] = useState<File | null>(null);
+  const paypalReceiptInput = useRef<HTMLInputElement>(null);
   const [booking, setBooking] = useState<PassengerBooking | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -180,23 +182,26 @@ export function PassengerBookingPage() {
     setStep(4);
   }
 
-  function chooseReceipt(file: File | undefined) {
+  function chooseReceipt(file: File | undefined, method: 'gcash' | 'paypal' = 'gcash') {
+    const setSelectedReceipt = method === 'paypal' ? setPaypalReceipt : setReceipt;
     setError(null);
     if (!file) {
-      setReceipt(null);
+      setSelectedReceipt(null);
       return;
     }
     if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
-      setReceipt(null);
+      setSelectedReceipt(null);
+      if (method === 'paypal' && paypalReceiptInput.current) paypalReceiptInput.current.value = '';
       setError('Receipt must be a JPG, JPEG, PNG, or WEBP image.');
       return;
     }
     if (file.size > 5 * 1024 * 1024) {
-      setReceipt(null);
+      setSelectedReceipt(null);
+      if (method === 'paypal' && paypalReceiptInput.current) paypalReceiptInput.current.value = '';
       setError('Receipt images must be 5 MB or smaller.');
       return;
     }
-    setReceipt(file);
+    setSelectedReceipt(file);
   }
 
   async function returnToSeatSelection(message: string) {
@@ -216,7 +221,7 @@ export function PassengerBookingPage() {
    * Records a passenger-reported payment from PayPal's external single-button
    * checkout. UVGo receives no authenticated order or capture id, so the
    * booking stays PENDING_VERIFICATION until a dispatcher checks the merchant
-   * account. The reference is required but is not treated as proof of payment.
+   * account. A receipt is required; the transaction reference is optional.
    */
   async function confirmPaypalHostedBooking(event: FormEvent) {
     event.preventDefault();
@@ -225,28 +230,29 @@ export function PassengerBookingPage() {
       await returnToSeatSelection(`Choose exactly ${passengers} seat${passengers === 1 ? '' : 's'} before submitting.`);
       return;
     }
-    if (!paypalReference.trim()) {
-      setError('Enter the transaction reference from your completed PayPal payment.');
+    if (!paypalReceipt) {
+      setError('Upload your PayPal receipt before submitting the payment.');
       return;
     }
     setLoading(true);
     setError(null);
     try {
+      const body = new FormData();
+      body.set('tripId', trip.id);
+      body.set('seats', JSON.stringify(selectedSeats));
+      body.set('contact', contact);
+      body.set('paypalTransactionReference', paypalReference);
+      body.set('receipt', paypalReceipt);
       const response = await apiRequest<{ booking: PassengerBooking }>('/passenger/reservations/paypal/hosted', {
         method: 'POST',
-        body: JSON.stringify({
-          tripId: trip.id,
-          seats: selectedSeats,
-          contact,
-          paypalTransactionReference: paypalReference,
-        }),
+        body,
       });
       setBooking(response.booking);
       setStep(5);
     } catch (caughtError) {
       setError(caughtError instanceof ApiError ? caughtError.message : 'The booking could not be completed.');
       if (caughtError instanceof ApiError && caughtError.code === 'SEAT_UNAVAILABLE') {
-        await returnToSeatSelection('Those seats were just reserved by another passenger. Your reservation was not submitted. Do not pay again—choose other available seats and reuse the same PayPal reference, or contact the terminal.');
+        await returnToSeatSelection('Those seats were just reserved by another passenger. Your reservation was not submitted. Do not pay again—choose other available seats and reuse the same PayPal receipt, or contact the terminal.');
       } else if (caughtError instanceof ApiError && caughtError.code === 'TRIP_CLOSED') {
         setError('This departure closed before your payment report was submitted, so no reservation was created. Do not pay again—keep the PayPal receipt and contact the terminal for assistance.');
       }
@@ -300,7 +306,7 @@ export function PassengerBookingPage() {
                 <p className="mt-2 text-sm text-text-secondary">Advance reservations are available for Goa only.</p>
               </div>
               <Card className="p-5 sm:p-7">
-                <form className="grid gap-4 md:grid-cols-[1.4fr_1fr_1fr_auto] md:items-end" onSubmit={searchTrips}>
+                <form className="grid gap-4 sm:grid-cols-2 xl:grid-cols-[1.4fr_1fr_1fr_auto] sm:items-end" onSubmit={searchTrips}>
                   <Input label="Route" value="NCEBT → Goa Terminal" disabled leadingIcon={<MapPin className="h-4 w-4" />} />
                   <Input label="Departure date" type="date" min={tomorrow()} value={date} onChange={(event) => setDate(event.target.value)} leadingIcon={<CalendarDays className="h-4 w-4" />} required />
                   <label className="block text-sm font-semibold">Passengers<select value={passengers} onChange={(event) => setPassengers(Number(event.target.value))} className="mt-1.5 min-h-touch w-full rounded-control border border-border-strong bg-white px-3 text-sm"><option value={1}>1 Passenger</option><option value={2}>2 Passengers</option><option value={3}>3 Passengers</option><option value={4}>4 Passengers</option></select></label>
@@ -312,16 +318,16 @@ export function PassengerBookingPage() {
               {trips.length ? <div className="mt-5 space-y-3" aria-label="Available Goa trips">{trips.map((option) => {
                 const loadingStartsOnDepartureDay = isSameCalendarDay(option.boardingStartTime, option.departureTime);
                 return (
-                  <button key={option.id} type="button" disabled={!option.canFitParty} onClick={() => setTrip(option)} className={cn('flex w-full items-center justify-between gap-4 rounded-card border bg-white p-4 text-left shadow-card transition', trip?.id === option.id ? 'border-primary ring-2 ring-primary/15' : 'border-border hover:border-primary/50', !option.canFitParty && 'cursor-not-allowed opacity-50')}>
+                  <button key={option.id} type="button" disabled={!option.canFitParty} onClick={() => setTrip(option)} className={cn('flex w-full flex-col items-stretch gap-3 rounded-card sm:flex-row sm:items-center sm:justify-between border bg-white p-4 text-left shadow-card transition', trip?.id === option.id ? 'border-primary ring-2 ring-primary/15' : 'border-border hover:border-primary/50', !option.canFitParty && 'cursor-not-allowed opacity-50')}>
                     <span className="min-w-0">
                       <span className="flex items-center gap-2 font-extrabold"><Clock3 className="h-4 w-4 shrink-0 text-primary" />{formatTripDate(option.departureTime)}</span>
-                      <span className="mt-2 grid grid-cols-2 gap-x-6 pl-6">
+                      <span className="mt-2 grid grid-cols-1 gap-2 pl-6 min-[400px]:grid-cols-2 sm:gap-x-6">
                         <span><span className="block text-xs font-semibold text-text-secondary">Loading time</span><span className="font-extrabold">{formatTripTime(option.boardingStartTime)}</span>{!loadingStartsOnDepartureDay ? <span className="block text-[0.7rem] font-semibold text-warning-dark">Previous day</span> : null}</span>
                         <span><span className="block text-xs font-semibold text-text-secondary">Departure time</span><span className="font-extrabold">{formatTripTime(option.departureTime)}</span></span>
                       </span>
                       <span className="mt-1 block truncate pl-6 text-xs text-text-secondary">{option.vanId} · Goso scheduled trip</span>
                     </span>
-                    <span className="shrink-0 text-right"><span className="block font-bold text-primary-dark">₱{option.fare.toFixed(2)}</span><span className="text-xs text-text-secondary">{option.availableSeats} seats left</span></span>
+                    <span className="flex shrink-0 items-center justify-between gap-3 border-t border-border pt-3 sm:block sm:border-0 sm:pt-0 sm:text-right"><span className="block font-bold text-primary-dark">₱{option.fare.toFixed(2)}</span><span className="text-xs text-text-secondary">{option.availableSeats} seats left</span></span>
                   </button>
                 );
               })}<Button fullWidth size="lg" disabled={!trip} loading={loading} onClick={() => void continueToSeats()} trailingIcon={<ArrowRight className="h-4 w-4" />}>Select seats</Button></div> : null}
@@ -398,7 +404,7 @@ export function PassengerBookingPage() {
                   </div>
                 ) : null}
                 {error ? <p role="alert" className="mt-4 rounded-control bg-danger-soft p-3 text-sm text-danger">{error}</p> : null}
-                <div className="mt-6 flex flex-col-reverse gap-2 sm:flex-row sm:justify-between">
+                <div className="mt-6 dashboard-form-actions flex flex-col-reverse gap-2 sm:flex-row sm:flex-wrap sm:justify-between">
                   <Button variant="ghost" onClick={() => { setError(null); setStep(2); }} leadingIcon={<ArrowLeft className="h-4 w-4" />}>Back to seats</Button>
                   <Button onClick={continueFromPassenger} trailingIcon={<ArrowRight className="h-4 w-4" />}>Review trip and payment</Button>
                 </div>
@@ -435,15 +441,27 @@ export function PassengerBookingPage() {
                         <p className="mt-1 text-sm leading-6 text-text-secondary">Pay exactly <strong className="text-text-primary">₱{total.toFixed(2)}</strong>. On PayPal, confirm the currency is PHP and the final total matches before paying.</p>
                       </div>
                     </div>
-                    <p className="my-4 rounded-control bg-warning-soft p-3 text-sm leading-6 text-text-primary">If you already paid, do not pay again. Skip the button and enter the transaction reference from your PayPal receipt below.</p>
+                    <p className="my-4 rounded-control bg-warning-soft p-3 text-sm leading-6 text-text-primary">If you already paid, do not pay again. Skip the button and upload your PayPal receipt below.</p>
                     <PayPalHostedButton />
                     <form onSubmit={(event) => void confirmPaypalHostedBooking(event)} className="mt-5 space-y-4 border-t border-border pt-5">
                       <div>
                         <h3 className="font-bold text-primary-dark">Submit the completed payment</h3>
-                        <p className="mt-1 text-sm leading-6 text-text-secondary">Opening PayPal does not submit a booking. Return here after payment and enter the transaction reference so the dispatcher can verify it.</p>
+                        <p className="mt-1 text-sm leading-6 text-text-secondary">Opening PayPal does not submit a booking. Return here after payment and upload your receipt so the dispatcher can verify it.</p>
                       </div>
-                      <Input label="PayPal transaction reference" required maxLength={100} value={paypalReference} onChange={(event) => { setPaypalReference(event.target.value); if (error) setError(null); }} placeholder="From your completed PayPal receipt" />
-                      <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-between">
+                      <Input label="PayPal transaction reference (optional)" maxLength={100} value={paypalReference} onChange={(event) => { setPaypalReference(event.target.value); if (error) setError(null); }} placeholder="From your completed PayPal receipt" />
+                      <div>
+                        <label className="block text-sm font-semibold">
+                          PayPal receipt (required)
+                          <span className="mt-1.5 flex min-h-touch cursor-pointer items-center gap-2 rounded-control border border-dashed border-primary bg-white px-3 py-2 text-sm text-primary-dark">
+                            <UploadCloud className="h-4 w-4 shrink-0" aria-hidden="true" />
+                            <span className="min-w-0 break-all">{paypalReceipt?.name ?? 'Choose JPG, PNG, or WEBP'}</span>
+                            <input ref={paypalReceiptInput} type="file" required={!paypalReceipt} aria-required="true" aria-label="PayPal receipt (required)" accept="image/jpeg,image/png,image/webp" disabled={loading} className="sr-only" onChange={(event) => chooseReceipt(event.target.files?.[0], 'paypal')} />
+                          </span>
+                          <span className="mt-1.5 block text-xs font-normal text-text-secondary">Attach your payment screenshot for dispatcher review. Maximum file size: 5 MB.</span>
+                        </label>
+                        {paypalReceipt ? <Button type="button" variant="ghost" size="sm" disabled={loading} className="mt-2" onClick={() => { setPaypalReceipt(null); if (paypalReceiptInput.current) paypalReceiptInput.current.value = ''; setError(null); }}>Remove receipt</Button> : null}
+                      </div>
+                      <div className="dashboard-form-actions flex flex-col-reverse gap-2 sm:flex-row sm:flex-wrap sm:justify-between">
                         <Button type="button" variant="ghost" onClick={() => { setError(null); setStep(3); }} leadingIcon={<ArrowLeft className="h-4 w-4" />}>Back to details</Button>
                         <Button type="submit" loading={loading} leadingIcon={<ShieldCheck className="h-4 w-4" />}>Submit payment for verification</Button>
                       </div>
@@ -464,7 +482,7 @@ export function PassengerBookingPage() {
                       <p className="mt-2 text-xs text-text-secondary">GCash transaction reference: <strong className="break-all text-text-primary">{gcashReference.trim() || 'Not supplied'}</strong></p>
                     </div>
                     <form onSubmit={(event) => void confirmGcashBooking(event)} className="mt-5">
-                      <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-between">
+                      <div className="dashboard-form-actions flex flex-col-reverse gap-2 sm:flex-row sm:flex-wrap sm:justify-between">
                         <Button type="button" variant="ghost" onClick={() => { setError(null); setStep(3); }} leadingIcon={<ArrowLeft className="h-4 w-4" />}>Back to details</Button>
                         <Button type="submit" loading={loading} leadingIcon={<ShieldCheck className="h-4 w-4" />}>Submit GCash receipt</Button>
                       </div>

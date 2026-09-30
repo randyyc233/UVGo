@@ -23,7 +23,7 @@ export function PayPalHostedButton() {
       </form>
       <p id="paypal-new-tab" className="text-xs leading-5 text-text-secondary">
         This is the merchant-supplied PayPal button. It opens the real payment page in a new tab.
-        Return here after payment to submit your transaction reference.
+        Return here after payment to upload your receipt.
       </p>
     </div>
   );

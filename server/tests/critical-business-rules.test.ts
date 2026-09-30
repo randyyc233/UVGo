@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import { after, beforeEach, test } from 'node:test';
 import { compare } from 'bcryptjs';
+import { readdir } from 'node:fs/promises';
+import { receiptDirectory } from '../src/middleware/receiptUpload.js';
+import { SESSION_COOKIE } from '../src/middleware/authMiddleware.js';
 import {
   AssignmentStatus,
   DispatchAction,
@@ -62,7 +65,7 @@ import { disconnectSeedClient, resetDemoData } from '../prisma/seed.js';
 import { admitAcceptedGosoSchedulesForDay, evaluateGosoLoading, normalizeSavedQueue, operationalQueueStatuses, withRouteQueue } from '../src/services/queueSchedulingService.js';
 import { manilaServiceDay, manilaServiceWeek } from '../src/services/driverSchedulePolicy.js';
 import { createWeeklySchedule, deleteWeeklySchedule, listWeeklySchedules, materializeWeeklySchedules, updateWeeklySchedule } from '../src/services/weeklyScheduleService.js';
-import { authenticateVerifiedGooglePassenger, requestPasswordReset, resetPasswordWithCode } from '../src/services/authService.js';
+import { authenticateUser, authenticateVerifiedGooglePassenger, requestPasswordReset, resetPasswordWithCode } from '../src/services/authService.js';
 import { createBackupDispatcher, getRouteDispatchers } from '../src/services/dispatcherAccountService.js';
 import { getDemoState } from '../src/services/demoService.js';
 import { createPayPalOrder } from '../src/services/paypalService.js';
@@ -807,6 +810,40 @@ test('8a. passenger notification actions are scoped to the signed-in passenger',
   assert.equal(await prisma.notification.findUnique({ where: { id: notification.id } }), null);
 });
 
+test('dashboard replacement alerts cover only today and explain an empty queue without deleting trips', async () => {
+  const today = manilaServiceDay(new Date());
+  await prisma.queueEntry.updateMany({ where: { route: RouteCode.GOA }, data: { status: QueueStatus.REPLACED } });
+  const occurrences = [
+    { id: 'test_replacement_yesterday', time: new Date(today.start.getTime() - 1) },
+    { id: 'test_replacement_today', time: today.start },
+    { id: 'test_replacement_tomorrow', time: today.end },
+  ];
+  for (const occurrence of occurrences) {
+    await prisma.trip.create({ data: {
+      id: occurrence.id, vehicleId: 'seed_vehicle_021', route: RouteCode.GOA,
+      scheduledOrTriggeredTime: occurrence.time, status: TripStatus.ASSIGNING,
+      awaitingQueueReplacement: true, fareAmount: DEFAULT_GOA_FARE,
+    } });
+  }
+  const dashboard = await getDispatcherDashboard(RouteCode.GOA, 'seed_user_dispatcher');
+  const alerts = dashboard.alerts.filter((alert) => alert.id.startsWith('replacement-test_'));
+  assert.deepEqual(dashboard.departures, [], 'Retained trips outside today’s queue must not appear as next departures.');
+  assert.deepEqual(alerts.map((alert) => alert.id), ['replacement-test_replacement_today']);
+  assert.match(alerts[0]!.message, /There are no vans in today’s queue/);
+  assert.equal(await prisma.trip.count({ where: { id: { in: occurrences.map((item) => item.id) }, awaitingQueueReplacement: true } }), 3);
+});
+
+test('dashboard next departures match the current day queue and its order', async () => {
+  for (const route of [RouteCode.GOA, RouteCode.LEGAZPI]) {
+    const dispatcherId = route === RouteCode.GOA ? 'seed_user_dispatcher' : 'seed_user_dispatcher_legazpi';
+    const dashboard = await getDispatcherDashboard(route, dispatcherId);
+    const queue = await getDispatcherQueue(route);
+    const expected = queue.entries.filter((entry) => entry.tripId && entry.departureTime).slice(0, 6);
+    assert.deepEqual(dashboard.departures.map((entry) => entry.id), expected.map((entry) => entry.id));
+    assert.deepEqual(dashboard.departures.map((entry) => entry.departureTime), expected.map((entry) => entry.departureTime));
+  }
+});
+
 test('8aa. dispatcher alert read state is persistent and scoped to the dispatcher route', async () => {
   const before = await getDispatcherDashboard(RouteCode.GOA, 'seed_user_dispatcher');
   const alert = before.alerts.find((item) => !item.isRead);
@@ -1488,15 +1525,11 @@ test('15. dispatchers can access only their assigned route', async () => {
     const baseUrl = `http://127.0.0.1:${address.port}/api`;
 
     async function login(email: string) {
-      const response = await fetch(`${baseUrl}/auth/login`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password: 'UVGoDemo123!' }),
-      });
-      assert.equal(response.status, 200);
-      const cookie = response.headers.get('set-cookie')?.split(';')[0];
-      assert.ok(cookie);
-      return cookie;
+      // This test exercises receipt routes, not the login throttle shared with
+      // earlier HTTP tests. Use the real auth service to create fixture sessions;
+      // every receipt request still passes through the normal session/role checks.
+      const session = await authenticateUser(email, 'UVGoDemo123!');
+      return `${SESSION_COOKIE}=${session.token}`;
     }
 
     const goaCookie = await login('dispatcher@uvgo.demo');
@@ -2285,6 +2318,8 @@ test('29. a single-button PayPal report is held for dispatcher verification', as
     seats: [6],
     contact: '09170000001',
     paypalTransactionReference: 'PP-HOSTED-TEST-001',
+    receiptImageKey: 'test.png',
+    receiptMimeType: 'image/png',
   });
 
   assert.equal(booking.status, 'pending_verification');
@@ -2305,16 +2340,18 @@ test('29. a single-button PayPal report is held for dispatcher verification', as
   const dispatcherPayment = (await getDispatcherPayments(RouteCode.GOA)).paypal.find((item) => item.reservation.reference === booking.reference);
   assert.equal(dispatcherPayment?.transactionReference, booking.payment?.transactionReference);
 
-  // A passenger cannot create a reviewable hold without identifying the
-  // completed PayPal transaction they claim to have paid.
+  // A receipt remains required even when a transaction reference is supplied.
   await assert.rejects(
     () => createPaypalHostedReservation({
       passengerId: 'seed_user_passenger_ana',
       tripId: 'seed_trip_goa_day_three',
       seats: [7],
       contact: '09170000001',
+      paypalTransactionReference: 'PP-MISSING-RECEIPT',
+      receiptImageKey: '',
+      receiptMimeType: '',
     }),
-    (error: unknown) => error instanceof AppError && error.code === 'PAYPAL_REFERENCE_REQUIRED',
+    (error: unknown) => error instanceof AppError && error.code === 'RECEIPT_REQUIRED',
   );
 
   // The seats are held while verification is pending, so a second passenger
@@ -2326,6 +2363,8 @@ test('29. a single-button PayPal report is held for dispatcher verification', as
       seats: [6],
       contact: '09170000001',
       paypalTransactionReference: 'PP-HOSTED-TEST-002',
+      receiptImageKey: 'test.png',
+      receiptMimeType: 'image/png',
     }),
     (error: unknown) => error instanceof AppError && error.code === 'SEAT_UNAVAILABLE',
   );
@@ -2337,9 +2376,115 @@ test('29. a single-button PayPal report is held for dispatcher verification', as
       seats: [7],
       contact: '09170000001',
       paypalTransactionReference: 'PP-HOSTED-TEST-001',
+      receiptImageKey: 'test.png',
+      receiptMimeType: 'image/png',
     }),
     (error: unknown) => error instanceof AppError && error.code === 'PAYPAL_REFERENCE_ALREADY_REPORTED',
   );
+});
+
+test('PayPal receipt uploads require receipts, allow optional references, and preserve verification, validation, cleanup, and route access', async () => {
+  const server = app.listen(0);
+  try {
+    await new Promise<void>((resolve) => server.once('listening', resolve));
+    const address = server.address();
+    assert.ok(address && typeof address === 'object');
+    const baseUrl = `http://127.0.0.1:${address.port}/api`;
+    async function login(email: string) {
+      const response = await fetch(`${baseUrl}/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password: 'UVGoDemo123!' }),
+      });
+      assert.equal(response.status, 200);
+      const cookie = response.headers.get('set-cookie')?.split(';')[0];
+      assert.ok(cookie);
+      return cookie;
+    }
+    const passengerCookie = await login('passenger@uvgo.demo');
+    const goaCookie = await login('dispatcher@uvgo.demo');
+    const legazpiCookie = await login('dispatcher.legazpi@uvgo.demo');
+    const image = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jJZkAAAAASUVORK5CYII=', 'base64');
+    function report(reference: string, seats = '[6]', file = new Blob([image], { type: 'image/png' })) {
+      const body = new FormData();
+      body.set('tripId', 'seed_trip_goa_day_three');
+      body.set('seats', seats);
+      body.set('contact', '09170000001');
+      body.set('paypalTransactionReference', reference);
+      body.set('receipt', file, 'paypal-receipt.png');
+      return body;
+    }
+    const submit = (body: FormData) => fetch(`${baseUrl}/passenger/reservations/paypal/hosted`, {
+      method: 'POST', headers: { Cookie: passengerCookie }, body,
+    });
+    const uploaded = await submit(report('PP-UPLOAD-001'));
+    assert.equal(uploaded.status, 201);
+    const payload = await uploaded.json() as { booking: { reference: string; status: string; payment: { status: string } } };
+    assert.equal(payload.booking.status, 'pending_verification');
+    assert.equal(payload.booking.payment.status, 'pending_verification');
+    const payment = await prisma.payment.findFirstOrThrow({ where: { reservation: { reference: payload.booking.reference } } });
+    assert.equal(payment.paypalOrderId, null);
+    assert.equal(payment.receiptMimeType, 'image/png');
+    assert.ok(payment.receiptImageKey);
+    const listed = (await getDispatcherPayments(RouteCode.GOA)).paypal.find((item) => item.id === payment.id);
+    assert.equal(listed?.receiptAvailable, true);
+    assert.equal(listed?.receiptUrl, `/api/dispatcher/payments/${payment.id}/receipt`);
+    const url = `${baseUrl}/dispatcher/payments/${payment.id}/receipt`;
+    const receiptResponse = await fetch(url, { headers: { Cookie: goaCookie } });
+    assert.equal(receiptResponse.status, 200);
+    assert.match(receiptResponse.headers.get('content-type') ?? '', /image\/png/);
+    assert.deepEqual(Buffer.from(await receiptResponse.arrayBuffer()), image);
+    assert.equal((await fetch(url, { headers: { Cookie: legazpiCookie } })).status, 403);
+    assert.equal((await fetch(url, { headers: { Cookie: passengerCookie } })).status, 403);
+
+    // A transaction reference cannot replace the required receipt.
+    const withoutReceipt = await fetch(`${baseUrl}/passenger/reservations/paypal/hosted`, {
+      method: 'POST', headers: { Cookie: passengerCookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tripId: 'seed_trip_goa_day_three', seats: [7], contact: '09170000001', paypalTransactionReference: 'PP-JSON-001' }),
+    });
+    assert.equal(withoutReceipt.status, 422);
+    assert.equal((await withoutReceipt.json() as { error: { code: string } }).error.code, 'RECEIPT_REQUIRED');
+
+    // Both blank and omitted references are accepted, without sharing a duplicate key.
+    for (const [seat, omitReference] of [[7, false], [8, true]] as const) {
+      const body = report('   ', JSON.stringify([seat]));
+      if (omitReference) body.delete('paypalTransactionReference');
+      const accepted = await submit(body);
+      assert.equal(accepted.status, 201);
+      const receiptOnly = await accepted.json() as { booking: { reference: string; status: string; payment: { status: string; transactionReference: string | null } } };
+      assert.equal(receiptOnly.booking.status, 'pending_verification');
+      assert.equal(receiptOnly.booking.payment.status, 'pending_verification');
+      assert.equal(receiptOnly.booking.payment.transactionReference, null);
+      const receiptPayment = await prisma.payment.findFirstOrThrow({ where: { reservation: { reference: receiptOnly.booking.reference } } });
+      assert.equal(receiptPayment.externalReferenceKey, null);
+      assert.ok(receiptPayment.receiptImageKey);
+      assert.equal(receiptPayment.paypalOrderId, null);
+      assert.equal((await prisma.reservationSeat.findUniqueOrThrow({ where: { tripId_seatNumber: { tripId: 'seed_trip_goa_day_three', seatNumber: seat } } })).reservationId, receiptPayment.reservationId);
+    }
+
+    const filesBeforeFailures = (await readdir(receiptDirectory)).sort();
+    const missingReceipt = report('PP-MISSING-RECEIPT', '[9]');
+    missingReceipt.delete('receipt');
+    const cases: Array<[FormData, string]> = [
+      [missingReceipt, 'RECEIPT_REQUIRED'],
+      [report('PP-WRONG-TYPE', '[8]', new Blob(['unsupported'], { type: 'application/pdf' })), 'INVALID_RECEIPT_TYPE'],
+      [report('PP-TOO-LARGE', '[8]', new Blob([new Uint8Array(5 * 1024 * 1024 + 1)], { type: 'image/png' })), 'LIMIT_FILE_SIZE'],
+      [report('PP-BAD-SEATS', 'not-json'), 'INVALID_SEATS'],
+      [report('P'.repeat(101), '[9]'), 'VALIDATION_ERROR'],
+      [report('PP-UPLOAD-001', '[8]'), 'PAYPAL_REFERENCE_ALREADY_REPORTED'],
+      [report('PP-SEAT-CONFLICT', '[6]'), 'SEAT_UNAVAILABLE'],
+    ];
+    for (const [body, code] of cases) {
+      const rejected = await submit(body);
+      assert.ok(rejected.status >= 400);
+      const error = await rejected.json() as { error: { code: string } };
+      assert.equal(error.error.code, code);
+      assert.deepEqual((await readdir(receiptDirectory)).sort(), filesBeforeFailures, 'rejected uploads must not leave orphan receipts');
+    }
+    assert.equal(await prisma.reservation.count({ where: { tripId: 'seed_trip_goa_day_three', passengerId: 'seed_user_passenger_ana' } }), 3);
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  }
 });
 
 test('30. dispatcher approval and rejection handle reported PayPal payments safely', async () => {
@@ -2349,6 +2494,8 @@ test('30. dispatcher approval and rejection handle reported PayPal payments safe
     seats: [6],
     contact: '09170000001',
     paypalTransactionReference: 'PP-MANUAL-APPROVE',
+    receiptImageKey: 'test.png',
+    receiptMimeType: 'image/png',
   });
   const approvedPayment = await prisma.payment.findFirstOrThrow({ where: { reservation: { reference: approved.reference } } });
   await decideGcashPayment('seed_user_dispatcher', RouteCode.GOA, approvedPayment.id, 'approve', '');
@@ -2362,7 +2509,8 @@ test('30. dispatcher approval and rejection handle reported PayPal payments safe
     tripId: 'seed_trip_goa_day_three',
     seats: [7],
     contact: '09170000001',
-    paypalTransactionReference: 'PP-MANUAL-REJECT',
+    receiptImageKey: 'test.png',
+    receiptMimeType: 'image/png',
   });
   const rejectedPayment = await prisma.payment.findFirstOrThrow({ where: { reservation: { reference: rejected.reference } } });
   await assert.rejects(
@@ -2381,6 +2529,8 @@ test('30. dispatcher approval and rejection handle reported PayPal payments safe
     seats: [7],
     contact: '09170000001',
     paypalTransactionReference: 'PP-MANUAL-REUSED-SEAT',
+    receiptImageKey: 'test.png',
+    receiptMimeType: 'image/png',
   });
   assert.equal(reused.status, 'pending_verification');
 });

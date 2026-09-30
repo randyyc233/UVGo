@@ -11,7 +11,7 @@ export function Card({ children, padded = true, elevated = false, className, ...
   return (
     <section
       className={cn(
-        'rounded-card border border-border bg-surface',
+        'ui-card rounded-card border border-border bg-surface',
         padded && 'p-4 sm:p-5',
         elevated && 'shadow-card',
         className,

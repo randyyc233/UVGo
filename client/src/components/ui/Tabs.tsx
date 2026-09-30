@@ -34,7 +34,7 @@ export function Tabs({ items, activeId, onChange, label, className }: TabsProps)
   }
 
   return (
-    <div className={cn('flex border-b border-border', className)} role="tablist" aria-label={label}>
+    <div className={cn('ui-tabs flex border-b border-border', className)} role="tablist" aria-label={label}>
       {items.map((item, index) => {
         const selected = item.id === activeId;
 

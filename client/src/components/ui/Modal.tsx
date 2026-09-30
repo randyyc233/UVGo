@@ -57,25 +57,25 @@ export function Modal({ open, title, description, onClose, children, footer, cla
   if (!open) return null;
 
   return createPortal(
-    <div className="fixed inset-0 z-50 flex items-end justify-center bg-text-primary/45 p-0 sm:items-center sm:p-4" role="presentation" onMouseDown={onClose}>
+    <div className="dashboard-shell fixed inset-0 z-50 flex items-end justify-center bg-text-primary/45 p-0 sm:items-center sm:p-4" role="presentation" onMouseDown={onClose}>
       <section
         ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
         tabIndex={-1}
-        className={cn('max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-t-3xl bg-surface p-5 shadow-floating sm:rounded-card sm:p-6', className)}
+        className={cn('max-h-[90dvh] w-full max-w-lg overflow-y-auto rounded-t-3xl bg-surface p-5 shadow-floating sm:rounded-card sm:p-6', className)}
         onMouseDown={(event) => event.stopPropagation()}
       >
         <header className="flex items-start justify-between gap-4">
-          <div>
+          <div className="min-w-0">
             <h2 id={titleId} className="text-lg font-bold">{title}</h2>
             {description ? <p className="mt-1 text-sm leading-5 text-text-secondary">{description}</p> : null}
           </div>
           <IconButton label="Close dialog" icon={<X className="h-5 w-5" />} onClick={onClose} />
         </header>
         <div className="mt-5">{children}</div>
-        {footer ? <footer className="mt-6 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">{footer}</footer> : null}
+        {footer ? <footer className="dashboard-form-actions mt-6 flex flex-col-reverse gap-2 sm:flex-row sm:flex-wrap sm:justify-end">{footer}</footer> : null}
       </section>
     </div>,
     document.body,

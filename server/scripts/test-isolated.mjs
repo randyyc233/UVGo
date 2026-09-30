@@ -3,6 +3,9 @@ import { PrismaClient } from '@prisma/client';
 import { spawnSync } from 'node:child_process';
 import process from 'node:process';
 import { URL } from 'node:url';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
 
 // Never seed/reset the application's database to run regression tests.
 const databaseName = `test_uvgo_${Date.now()}_${process.pid}`;
@@ -13,11 +16,13 @@ const testUrl = new URL(applicationUrl);
 testUrl.pathname = `/${databaseName}`;
 if (!/^test_uvgo_[0-9]+_[0-9]+$/.test(databaseName) || testUrl.pathname === applicationUrl.pathname) throw new Error('Invalid isolated test database.');
 const admin = new PrismaClient();
+const uploadDirectory = await mkdtemp(join(tmpdir(), 'uvgo-test-receipts-'));
+if (dirname(uploadDirectory) !== tmpdir()) throw new Error('Invalid isolated upload directory.');
 let created = false;
 try {
   await admin.$executeRawUnsafe(`CREATE DATABASE \`${databaseName}\``);
   created = true;
-  const env = { ...process.env, DATABASE_URL: testUrl.toString(), NODE_ENV: 'test', DEMO_MODE: testDemoMode, UVGO_ISOLATED_TEST_DATABASE: databaseName };
+  const env = { ...process.env, DATABASE_URL: testUrl.toString(), UPLOAD_DIR: uploadDirectory, NODE_ENV: 'test', DEMO_MODE: testDemoMode, UVGO_ISOLATED_TEST_DATABASE: databaseName };
   // Resolve workspace-hoisted packages without depending on shell execution.
   const { createRequire } = await import('node:module');
   const require = createRequire(import.meta.url);
@@ -29,4 +34,6 @@ try {
   // This exact database was created above by this run and contains test fixtures only.
   if (created) await admin.$executeRawUnsafe(`DROP DATABASE \`${databaseName}\``);
   await admin.$disconnect();
+  // Delete only the exact temporary upload directory created by this test run.
+  await rm(uploadDirectory, { recursive: true, force: true });
 }

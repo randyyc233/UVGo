@@ -173,12 +173,13 @@ async function queueRows(route?: RouteCode) {
 }
 
 export async function getDispatcherDashboard(route: RouteCode, dispatcherId: string) {
+  const today = manilaServiceDay(new Date());
   if (route === RouteCode.GOA) {
     await materializeWeeklySchedules(new Date());
     await admitAcceptedGosoSchedulesForDay();
   }
   if (route === RouteCode.LEGAZPI) await syncTayaDailyQueue();
-  const [vehicles, queues, pendingPayments, tripsDispatched, trips, geofenceEvents, logs, replacementTrips] = await Promise.all([
+  const [vehicles, queues, pendingPayments, tripsDispatched, geofenceEvents, logs, replacementTrips] = await Promise.all([
     prisma.vehicle.findMany({
       where: { route },
       include: {
@@ -193,10 +194,11 @@ export async function getDispatcherDashboard(route: RouteCode, dispatcherId: str
     queueRows(route),
     prisma.payment.count({ where: { method: { in: [PaymentMethod.GCASH_RECEIPT, PaymentMethod.PAYPAL] }, status: PaymentStatus.PENDING_VERIFICATION, reservation: { trip: { route } } } }),
     prisma.trip.count({ where: { route, departedAt: { gte: startOfToday() } } }),
-    prisma.trip.findMany({ where: { route, status: { in: activeTripStatuses } }, orderBy: { scheduledOrTriggeredTime: 'asc' }, take: 6, include: { vehicle: { select: { vanId: true, capacity: true } }, passengerCounts: { orderBy: { timestamp: 'desc' }, take: 1 } } }),
     prisma.geofenceEvent.findMany({ where: { vehicle: { route } }, orderBy: { timestamp: 'desc' }, take: 5, include: { vehicle: { select: { vanId: true, route: true } } } }),
     prisma.dispatchLog.findMany({ where: { route }, orderBy: { timestamp: 'desc' }, take: 5, include: { actor: { select: { name: true } } } }),
-    prisma.trip.findMany({ where: { route, awaitingQueueReplacement: true, status: { in: activeTripStatuses } }, orderBy: { scheduledOrTriggeredTime: 'asc' } }),
+    // Replacement trips survive queue removal to protect bookings. Only today's
+    // occurrences belong in live alerts; keep other dates intact for review.
+    prisma.trip.findMany({ where: { route, awaitingQueueReplacement: true, status: { in: activeTripStatuses }, scheduledOrTriggeredTime: { gte: today.start, lt: today.end } }, orderBy: { scheduledOrTriggeredTime: 'asc' } }),
   ]);
   const passengerWaiting = queues.reduce((total, entry) => total + entry.occupancy, 0);
   const departureReviews = vehicles
@@ -221,7 +223,7 @@ export async function getDispatcherDashboard(route: RouteCode, dispatcherId: str
       };
     });
   const allAlerts = [
-    ...replacementTrips.map((trip) => ({ id: `replacement-${trip.id}`, tone: 'danger', title: 'Loading departure needs a van', message: `No suitable replacement is present for ${trip.scheduledOrTriggeredTime.toLocaleString('en-PH', { timeZone: 'Asia/Manila', dateStyle: 'medium', timeStyle: 'short', hour12: true })}. Reservations and departure time are retained. Adjust the queue or arrange a suitable van.`, timestamp: trip.updatedAt.toISOString() })),
+    ...replacementTrips.map((trip) => ({ id: `replacement-${trip.id}`, tone: 'danger', title: 'Today’s departure needs a replacement van', message: `The departure scheduled for ${trip.scheduledOrTriggeredTime.toLocaleString('en-PH', { timeZone: 'Asia/Manila', dateStyle: 'medium', timeStyle: 'short', hour12: true })} is awaiting a replacement van. ${queues.length === 0 ? 'There are no vans in today’s queue.' : 'A replacement has not yet been assigned.'} The trip and any reservations are retained. Arrange a replacement van.`, timestamp: trip.updatedAt.toISOString() })),
     ...vehicles.filter((vehicle) => vehicle.status === VehicleStatus.DELAYED).map((vehicle) => ({ id: `vehicle-${vehicle.id}`, tone: 'danger', title: 'Van delayed', message: `${vehicle.vanId} requires dispatcher attention.`, timestamp: vehicle.updatedAt.toISOString() })),
     ...(pendingPayments ? [{ id: 'pending-payments', tone: 'warning', title: 'Payment verification', message: `${pendingPayments} payment${pendingPayments === 1 ? '' : 's'} awaiting review.`, timestamp: new Date().toISOString() }] : []),
   ];
@@ -255,10 +257,13 @@ export async function getDispatcherDashboard(route: RouteCode, dispatcherId: str
     },
     alerts: alerts.map((alert) => ({ ...alert, isRead: readAlertKeys.has(alert.id) })),
     departureReviews,
-    departures: trips.map((trip) => {
-      const capacity = passengerCapacityOf(trip.vehicle);
-      return { id: trip.id, route: routeLabels[trip.route], vanId: trip.vehicle.vanId, departureTime: trip.scheduledOrTriggeredTime.toISOString(), occupancy: Math.min(capacity, trip.passengerCounts[0]?.count ?? 0), capacity, status: trip.status.toLowerCase() };
-    }),
+    // Use the same current-day rows and order as queue management. A retained
+    // trip outside the visible queue must not appear as the next departure.
+    departures: queues.flatMap((entry) => entry.tripId && entry.departureTime ? [{
+      id: entry.id, route: entry.route, vanId: entry.vanId,
+      departureTime: entry.departureTime, occupancy: entry.occupancy,
+      capacity: entry.capacity, status: entry.status,
+    }] : []).slice(0, 6),
     activity: [
       ...geofenceEvents.map((event) => ({ id: event.id, type: 'geofence', title: `${event.vehicle.vanId} ${event.eventType === 'ENTERED' ? 'entered' : 'exited'} Active Zone`, detail: routeLabels[event.vehicle.route], timestamp: event.timestamp.toISOString() })),
       ...logs.map((log) => ({ id: log.id, type: 'dispatch', title: log.action.toLowerCase().replaceAll('_', ' '), detail: `${log.actor.name} · ${log.reason ?? log.targetId}`, timestamp: log.timestamp.toISOString() })),
@@ -723,7 +728,7 @@ export async function decideGcashPayment(actorUserId: string, dispatcherRoute: R
 
 export async function getPaymentReceiptPath(paymentId: string, dispatcherRoute: RouteCode) {
   const payment = await prisma.payment.findUnique({ where: { id: paymentId }, include: { reservation: { include: { trip: { select: { route: true } } } } } });
-  if (!payment?.receiptImageKey || payment.method !== PaymentMethod.GCASH_RECEIPT) throw new AppError(404, 'RECEIPT_NOT_FOUND', 'This payment has no receipt image.');
+  if (!payment?.receiptImageKey || (payment.method !== PaymentMethod.GCASH_RECEIPT && payment.method !== PaymentMethod.PAYPAL)) throw new AppError(404, 'RECEIPT_NOT_FOUND', 'This payment has no receipt image.');
   if (payment.reservation.trip.route !== dispatcherRoute) throw new AppError(403, 'ROUTE_ACCESS_DENIED', `This dispatcher can view receipts only for the ${routeLabels[dispatcherRoute]} route.`);
   const receiptPath = resolve(receiptDirectory, payment.receiptImageKey);
   if (!receiptPath.startsWith(receiptDirectory) || !existsSync(receiptPath)) throw new AppError(404, 'RECEIPT_NOT_FOUND', 'The receipt image is unavailable.');

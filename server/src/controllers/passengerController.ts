@@ -66,9 +66,29 @@ export async function releasePaypal(request: Request, response: Response) {
  * payment and a dispatcher verifies it, exactly like a GCash receipt.
  */
 export async function createPaypalHosted(request: Request, response: Response) {
-  const input = paypalHostedReservationSchema.parse(request.body);
-  const booking = await createPaypalHostedReservation({ ...input, passengerId: request.auth!.userId });
-  response.status(201).json({ booking });
+  try {
+    if (!request.file) throw new AppError(422, 'RECEIPT_REQUIRED', 'Upload your PayPal receipt before continuing.');
+    let seats: unknown = request.body?.seats;
+    // Multipart uploads encode seats as JSON text.
+    if (request.is('multipart/form-data') && typeof seats === 'string') {
+      try {
+        seats = JSON.parse(seats);
+      } catch {
+        throw new AppError(422, 'INVALID_SEATS', 'Selected seats could not be read.');
+      }
+    }
+    const input = paypalHostedReservationSchema.parse({ ...request.body, seats });
+    const booking = await createPaypalHostedReservation({
+      ...input,
+      passengerId: request.auth!.userId,
+      receiptImageKey: request.file.filename,
+      receiptMimeType: request.file.mimetype,
+    });
+    response.status(201).json({ booking });
+  } catch (error) {
+    if (request.file) await unlink(request.file.path).catch(() => undefined);
+    throw error;
+  }
 }
 
 export async function createGcash(request: Request, response: Response) {

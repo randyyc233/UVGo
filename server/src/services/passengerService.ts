@@ -315,20 +315,19 @@ export async function createGcashReservation(input: ReservationInput & { gcashRe
  * therefore parked at PENDING_VERIFICATION, exactly like a GCash receipt, and a
  * dispatcher confirms it once the payment shows up in the PayPal account.
  *
- * Unlike `createGcashReservation` this takes no uploaded receipt — the proof of
- * payment is the PayPal transaction itself. `paypalOrderId` is not set because
+ * A required uploaded receipt supports dispatcher review; the payment still
+ * needs verification in the merchant account. `paypalOrderId` is not set because
  * there is no order id to record; `paypalTransactionReference` stores whatever
  * reference the passenger supplies from their PayPal receipt.
  */
-export async function createPaypalHostedReservation(input: ReservationInput & { paypalTransactionReference?: string }) {
+export async function createPaypalHostedReservation(input: ReservationInput & { paypalTransactionReference?: string; receiptImageKey: string; receiptMimeType: string }) {
+  if (!input.receiptImageKey || !input.receiptMimeType) throw new AppError(422, 'RECEIPT_REQUIRED', 'Upload your PayPal receipt before continuing.');
   const paypalTransactionReference = input.paypalTransactionReference?.trim();
-  if (!paypalTransactionReference) throw new AppError(422, 'PAYPAL_REFERENCE_REQUIRED', 'Enter the transaction reference from your completed PayPal payment.');
-  const externalReferenceKey = externalPaymentReferenceKey(PaymentMethod.PAYPAL, paypalTransactionReference)!;
+  const externalReferenceKey = externalPaymentReferenceKey(PaymentMethod.PAYPAL, paypalTransactionReference);
   let result;
   try {
     result = await prisma.$transaction(async (transaction) => {
-      const previouslyReported = await transaction.payment.findUnique({ where: { externalReferenceKey }, select: { id: true } });
-      if (previouslyReported) {
+      if (externalReferenceKey && await transaction.payment.findUnique({ where: { externalReferenceKey }, select: { id: true } })) {
         throw new AppError(409, 'PAYPAL_REFERENCE_ALREADY_REPORTED', 'This PayPal transaction reference has already been submitted. Check My Bookings instead of submitting it again.');
       }
       const created = await createReservationRecord(
@@ -337,7 +336,7 @@ export async function createPaypalHostedReservation(input: ReservationInput & { 
         PaymentMethod.PAYPAL,
         PaymentStatus.PENDING_VERIFICATION,
         ReservationStatus.PENDING_VERIFICATION,
-        { gcashReference: paypalTransactionReference, externalReferenceKey },
+        { gcashReference: paypalTransactionReference, externalReferenceKey, receiptImageKey: input.receiptImageKey, receiptMimeType: input.receiptMimeType },
       );
       await transaction.notification.create({ data: { userId: input.passengerId, type: NotificationType.PAYMENT, message: `PayPal payment reported for ${created.reservation.reference}. Verification is pending.` } });
       return created;

@@ -9,7 +9,7 @@ All ten delivery phases are complete. The implementation follows the supplied mo
 - Client: React 19, TypeScript, Vite, React Router, Tailwind CSS, Lucide icons, Mapbox GL JS
 - Server: Node.js, Express 5, TypeScript, Zod, JWT cookie sessions, Helmet, rate limiting, Multer
 - Data: MySQL 8.4 and Prisma 6
-- Payments: GCash-only passenger checkout using receipt upload and dispatcher verification, with legacy PayPal records retained for compatibility
+- Payments: GCash and merchant-hosted PayPal checkout using receipt uploads and dispatcher verification, with legacy SDK PayPal records retained for compatibility
 - Quality: TypeScript, ESLint, Node test runner through `tsx`, production builds, and rendered browser QA
 
 ## Architecture
@@ -86,7 +86,7 @@ Backend variables:
 | `PAYPAL_CLIENT_ID` | Optional PayPal Sandbox client ID |
 | `PAYPAL_CLIENT_SECRET` | Optional PayPal Sandbox secret |
 | `PAYPAL_BASE_URL` | PayPal Sandbox API base URL |
-| `UPLOAD_DIR` | Private GCash receipt directory |
+| `UPLOAD_DIR` | Private GCash and PayPal receipt directory; persist it across redeployments |
 | `DEMO_MODE` | Enables local payment fallback and simulation controls |
 | `DISPATCH_ENGINE_INTERVAL_MS` | Automation evaluation interval |
 
@@ -185,9 +185,11 @@ Sign in as either route dispatcher and open **More** to access demo-only operati
 
 Every simulation is written to the dispatch audit log. See [docs/demo-runbook.md](docs/demo-runbook.md) for a guided presentation sequence.
 
-## Legacy PayPal compatibility
+## PayPal receipt flow and legacy SDK compatibility
 
-PayPal is not offered for new passenger bookings. Its service, environment variables, and captured demo record remain for historical compatibility and regression coverage.
+New passenger bookings can use the merchant-supplied Pay Now button. After paying on PayPal, the passenger returns to UVGo and uploads a required JPG, PNG, or WEBP receipt of up to 5 MB. The transaction reference is optional. The booking remains pending verification until the Goa dispatcher checks the merchant account and approves or rejects it. Opening PayPal or uploading a receipt does not automatically verify payment.
+
+The hosted button uses its existing merchant URL and does not need PayPal SDK credentials. Keep the private receipt directory on persistent storage when redeploying. Existing SDK-created and captured PayPal records remain supported.
 
 If the legacy Sandbox path must be exercised, set `PAYPAL_CLIENT_ID` and `PAYPAL_CLIENT_SECRET` in `server/.env` using credentials from a PayPal Sandbox application. Keep `PAYPAL_BASE_URL=https://api-m.sandbox.paypal.com`.
 
@@ -197,11 +199,11 @@ When credentials are configured, UVGo creates and captures real Sandbox orders. 
 
 GCash is intentionally a manual verification flow:
 
-1. The passenger uploads an image receipt for the GCash-only checkout.
+1. The passenger uploads an image receipt for GCash checkout.
 2. The server validates and stores the file outside the public client directory.
 3. The booking and payment enter `PendingVerification`.
 4. A dispatcher reviews the receipt under **Payments** and approves or rejects it.
-5. Approval confirms the booking; rejection returns it to pending payment and records a reason.
+5. Approval confirms the booking; rejection releases the seats, records a reason, and notifies the passenger.
 
 This prototype does not connect to a GCash merchant API.
 
@@ -209,10 +211,10 @@ This prototype does not connect to a GCash merchant API.
 
 - The NCEBT Active Zone has a fixed seeded center and a 5 km radius.
 - Goa is Goso: fixed schedule, FIFO vehicle assignment, and no full-occupancy requirement.
-- Legazpi is Taya: strict geofenced-arrival FIFO and exactly 100% occupancy before ready-for-dispatch.
+- Legazpi is Taya: the saved daily sequence establishes priority and full occupancy enables capacity dispatch. After a van departs, its absent immediate follower is moved to the back; a present follower keeps its turn. GPS arrival preserves the daily order.
 - Only Goa trips can be reserved online.
 - Seats are unique per trip and checked again inside the reservation transaction.
-- Driver rejection or response expiry advances the assignment to the next eligible van.
+- Scheduled assignments are active immediately; cancellation invokes the existing replacement and passenger-reallocation workflow.
 - Queue-position overrides accept an optional reason and always create a `DispatchLog`; delay, move-to-last, and replacement actions still require a reason.
 - Rescheduling closes 24 hours before departure and preserves passenger count.
 - An unavailable vehicle reallocates eligible reservations and notifies affected passengers.
@@ -228,7 +230,7 @@ npm run build
 npm run demo:reset
 ```
 
-`npm test` runs all 21 critical business-rule tests against MySQL and restores the demo baseline afterward. The coverage inventory is documented in [docs/test-and-release.md](docs/test-and-release.md).
+`npm test` runs the critical business-rule suite in a unique temporary MySQL database and upload directory, then removes those test resources. It does not reset the application database or its uploaded receipts. The coverage inventory is documented in [docs/test-and-release.md](docs/test-and-release.md).
 
 ## Documentation
 
@@ -243,6 +245,7 @@ npm run demo:reset
 - [Accessibility and responsive behavior](docs/accessibility-and-responsive.md)
 - [Demo runbook](docs/demo-runbook.md)
 - [Testing and release QA](docs/test-and-release.md)
+- [Redeployment instructions](docs/redeployment.md)
 
 ## Known prototype limitations
 
@@ -254,7 +257,3 @@ npm run demo:reset
 - Booking and dispatch notifications remain in-app records; email delivery is limited to account verification and password recovery.
 - The application uses seeded Philippine routes and fares and does not include an administrator role.
 - The dispatcher map chunk is intentionally substantial because Mapbox is loaded for that role; it is lazy-loaded away from public, passenger, and driver routes.
-#   U V G o  
- 
-#   U V G  
- 

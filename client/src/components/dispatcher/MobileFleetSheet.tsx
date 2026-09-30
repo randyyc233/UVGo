@@ -31,7 +31,7 @@ export function MobileFleetSheet({ fleet }: { fleet: FleetSnapshot }) {
     return (
       <button
         type="button"
-        className="absolute bottom-4 left-1/2 z-20 inline-flex min-h-touch -translate-x-1/2 items-center gap-2 whitespace-nowrap rounded-pill border border-primary/20 bg-primary px-5 py-3 text-sm font-extrabold text-white shadow-floating transition-colors hover:bg-primary-dark focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2"
+        className="absolute inset-x-3 bottom-4 z-20 inline-flex min-h-touch items-center justify-center gap-2 rounded-pill border border-primary/20 bg-primary px-3 py-3 text-sm font-extrabold text-white shadow-floating transition-colors hover:bg-primary-dark focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2"
         aria-controls="mobile-fleet-details"
         aria-expanded="false"
         onClick={() => setVisible(true)}
@@ -60,7 +60,7 @@ export function MobileFleetSheet({ fleet }: { fleet: FleetSnapshot }) {
         </div>
         <button
           type="button"
-          className="flex h-10 w-10 items-center justify-center rounded-full text-text-secondary transition-colors hover:bg-cream hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+          className="flex min-h-touch min-w-touch shrink-0 items-center justify-center rounded-full text-text-secondary transition-colors hover:bg-cream hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
           aria-label="Close active vehicles"
           aria-controls="mobile-fleet-details"
           aria-expanded="true"

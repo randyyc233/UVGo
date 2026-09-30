@@ -86,7 +86,7 @@ passengerRouter.get('/session', (request, response) => {
 });
 passengerRouter.get('/trips', asyncHandler(searchTrips));
 passengerRouter.get('/trips/:tripId/seats', asyncHandler(tripSeats));
-passengerRouter.post('/reservations/paypal/hosted', asyncHandler(createPaypalHosted));
+passengerRouter.post('/reservations/paypal/hosted', receiptUpload.single('receipt'), asyncHandler(createPaypalHosted));
 passengerRouter.post('/reservations/gcash', receiptUpload.single('receipt'), asyncHandler(createGcash));
 passengerRouter.get('/bookings', asyncHandler(bookings));
 passengerRouter.get('/bookings/:reference', asyncHandler(booking));

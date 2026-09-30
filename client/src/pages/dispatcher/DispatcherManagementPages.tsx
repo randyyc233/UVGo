@@ -306,7 +306,7 @@ export function DispatcherDriversPage() {
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+      <div className="dashboard-page-toolbar flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div><p className="text-xs font-bold uppercase tracking-[0.12em] text-primary">{data.route} operations</p><h2 className="mt-1 text-2xl font-black">Drivers & vehicles</h2></div>
         <Button onClick={openCreate} leadingIcon={<Plus className="h-4 w-4" />}>Add driver</Button>
       </div>
@@ -316,7 +316,7 @@ export function DispatcherDriversPage() {
           <Card key={driver.id} className="p-5">
             <div className="flex items-start justify-between gap-3"><div className="flex gap-3"><span className="flex h-11 w-11 items-center justify-center rounded-full bg-primary-soft text-primary"><UserRoundCog className="h-5 w-5" /></span><div><h3 className="font-extrabold">{driver.name}</h3><p className="text-sm text-text-secondary">{driver.email}</p><p className="text-xs text-text-muted">{driver.contact}</p></div></div><StatusBadge tone={driver.isActive ? 'success' : 'neutral'}>{driver.isActive ? 'Active' : 'Inactive'}</StatusBadge></div>
             <div className="mt-4 grid grid-cols-3 gap-2 rounded-control bg-cream p-3 text-sm"><div><p className="text-xs text-text-secondary">Van</p><p className="font-bold">{driver.vehicle?.vanId ?? 'Unassigned'}</p></div><div><p className="text-xs text-text-secondary">Plate</p><p className="font-bold">{driver.vehicle?.plateNo ?? '—'}</p></div><div><p className="text-xs text-text-secondary">Seat capacity</p><p className="font-bold">{driver.vehicle ? `${driver.vehicle.capacity} seats` : '—'}</p></div></div>
-            <div className="mt-4 flex flex-wrap gap-2"><Button size="sm" variant="outline" onClick={() => openEdit(driver)} leadingIcon={<Pencil className="h-4 w-4" />}>Edit</Button><Button size="sm" variant="ghost" onClick={() => { setPassword(''); setPasswordDriver(driver); }} leadingIcon={<KeyRound className="h-4 w-4" />}>Reset password</Button><Button size="sm" variant="danger" onClick={() => setDeletingDriver(driver)} leadingIcon={<Trash2 className="h-4 w-4" />}>Delete</Button></div>
+            <div className="dashboard-actions mt-4"><Button size="sm" variant="outline" onClick={() => openEdit(driver)} leadingIcon={<Pencil className="h-4 w-4" />}>Edit</Button><Button size="sm" variant="ghost" onClick={() => { setPassword(''); setPasswordDriver(driver); }} leadingIcon={<KeyRound className="h-4 w-4" />}>Reset password</Button><Button size="sm" variant="danger" onClick={() => setDeletingDriver(driver)} leadingIcon={<Trash2 className="h-4 w-4" />}>Delete</Button></div>
           </Card>
         ))}
       </div>
@@ -457,7 +457,7 @@ export function DispatcherAccountsPage() {
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+      <div className="dashboard-page-toolbar flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <p className="text-xs font-bold uppercase tracking-[0.12em] text-primary">{data.route} operations</p>
           <h2 className="mt-1 text-2xl font-black">Dispatcher accounts</h2>
@@ -664,7 +664,7 @@ function DispatcherTayaSchedulesPage() {
             <div><p className="text-xs font-bold uppercase tracking-[0.12em] text-primary">Selected day</p><h4 className="mt-0.5 text-lg font-extrabold text-text-primary">{selectedWeekday.label}</h4></div>
             <StatusBadge tone="info">{`${vehicleIds.length} driver${vehicleIds.length === 1 ? '' : 's'}`}</StatusBadge>
           </div>
-          <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:items-end">
+          <div className="dashboard-inline-form mt-4 flex flex-col gap-2 sm:flex-row sm:items-end">
             <Select className="flex-1" label="Add van and driver" value={selectedVehicleId} onChange={(event) => setSelectedVehicleId(event.target.value)}>
               <option value="">Choose a van and driver</option>
               {availableVehicles.map((vehicle) => <option key={vehicle.id} value={vehicle.id}>{vehicle.vanId} · {vehicle.driver}</option>)}
@@ -673,7 +673,7 @@ function DispatcherTayaSchedulesPage() {
           </div>
           {vehicleIds.length ? <div className="mt-4 space-y-2">{vehicleIds.map((vehicleId, index) => {
             const vehicle = data.vehicles.find((candidate) => candidate.id === vehicleId);
-            return <div key={vehicleId} className="flex items-center gap-3 rounded-control border border-border bg-surface p-3"><span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-primary text-sm font-black text-white">{index + 1}</span><div className="min-w-0 flex-1"><p className="truncate font-extrabold">{vehicle?.vanId ?? 'Van'} · {vehicle?.driver ?? 'Driver'}</p><p className="text-xs text-text-secondary">{vehicle?.capacity ?? 0} passenger seats</p></div><div className="flex gap-1"><Button size="sm" variant="ghost" disabled={index === 0} aria-label="Move up" onClick={() => move(index, -1)}><ChevronUp className="h-4 w-4" /></Button><Button size="sm" variant="ghost" disabled={index === vehicleIds.length - 1} aria-label="Move down" onClick={() => move(index, 1)}><ChevronDown className="h-4 w-4" /></Button><Button size="sm" variant="danger" aria-label={`Remove ${vehicle?.driver ?? 'driver'}`} onClick={() => setVehicleIds((current) => current.filter((id) => id !== vehicleId))}><X className="h-4 w-4" /></Button></div></div>;
+            return <div key={vehicleId} className="grid grid-cols-[2.25rem_minmax(0,1fr)] gap-3 rounded-control border border-border bg-surface p-3 sm:flex sm:items-center"><span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-primary text-sm font-black text-white">{index + 1}</span><div className="min-w-0 flex-1"><p className="truncate font-extrabold">{vehicle?.vanId ?? 'Van'} · {vehicle?.driver ?? 'Driver'}</p><p className="text-xs text-text-secondary">{vehicle?.capacity ?? 0} passenger seats</p></div><div className="col-span-2 flex justify-end gap-2 sm:shrink-0 sm:gap-1"><Button className="w-11 shrink-0 px-0" size="sm" variant="ghost" disabled={index === 0} aria-label="Move up" onClick={() => move(index, -1)}><ChevronUp className="h-4 w-4" /></Button><Button className="w-11 shrink-0 px-0" size="sm" variant="ghost" disabled={index === vehicleIds.length - 1} aria-label="Move down" onClick={() => move(index, 1)}><ChevronDown className="h-4 w-4" /></Button><Button className="w-11 shrink-0 px-0" size="sm" variant="danger" aria-label={`Remove ${vehicle?.driver ?? 'driver'}`} onClick={() => setVehicleIds((current) => current.filter((id) => id !== vehicleId))}><X className="h-4 w-4" /></Button></div></div>;
           })}</div> : <p className="mt-4 rounded-control border border-dashed border-border bg-surface px-3 py-8 text-center text-sm text-text-muted">No drivers are scheduled for {selectedWeekday.label}.</p>}
           <Button className="mt-4" fullWidth loading={saving} onClick={() => void save()}>Save {selectedWeekday.label} queue order</Button>
         </section>
@@ -901,14 +901,14 @@ function DispatcherGosoSchedulesPage() {
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+      <div className="dashboard-page-toolbar flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div><p className="text-xs font-bold uppercase tracking-[0.12em] text-primary">Goso fixed-time operations</p><h2 className="mt-1 text-2xl font-black">Goa departure schedules</h2></div>
         <Button onClick={() => openWeeklyCreate()} disabled={!data.vehicles.length} leadingIcon={<CalendarDays className="h-4 w-4" />}>Set weekly schedule</Button>
       </div>
       {error ? <p role="alert" className="rounded-control bg-danger-soft p-3 text-sm text-danger">{error}</p> : null}
       {!data.vehicles.length ? <Card className="border-warning/30 bg-warning-soft p-4 text-sm">Create an active Goa driver and van before adding a departure.</Card> : null}
       <Card className="p-4 sm:p-5">
-        <div className="flex flex-col gap-2 border-b border-border pb-4 sm:flex-row sm:items-start sm:justify-between">
+        <div className="dashboard-page-toolbar flex flex-col gap-2 border-b border-border pb-4 sm:flex-row sm:items-start sm:justify-between">
           <div>
             <div className="flex flex-wrap items-center gap-2">
               <h3 className="text-lg font-extrabold">Fixed weekly timetable</h3>
@@ -956,7 +956,7 @@ function DispatcherGosoSchedulesPage() {
               <p className="text-xs font-bold uppercase tracking-[0.12em] text-primary">Selected day</p>
               <h4 className="mt-0.5 text-lg font-extrabold text-text-primary">{selectedWeekday.label}</h4>
             </div>
-            <Button size="sm" variant="outline" onClick={() => openWeeklyCreate(selectedWeekday.value)} disabled={!data.vehicles.length} leadingIcon={<Plus className="h-4 w-4" />}>Add {selectedWeekday.label}</Button>
+            <Button className="dashboard-primary-action" size="sm" variant="outline" onClick={() => openWeeklyCreate(selectedWeekday.value)} disabled={!data.vehicles.length} leadingIcon={<Plus className="h-4 w-4" />}>Add {selectedWeekday.label}</Button>
           </div>
           {selectedDayTemplates.length ? (
             <div className="mt-3 grid gap-3 md:grid-cols-2">
@@ -998,7 +998,7 @@ function DispatcherGosoSchedulesPage() {
                   <p className="font-extrabold text-text-primary">{schedule.vehicle.vanId} · {schedule.assignment?.driver}</p>
                   <p className="mt-1 text-sm text-text-secondary">Loading {manilaDateTime(schedule.boardingStartTime)} · Departure {manilaDateTime(schedule.departureTime)}</p>
                 </div>
-                <div className="flex shrink-0 flex-wrap items-center gap-2">
+                <div className="dashboard-actions">
                   <StatusBadge tone="success">Assigned</StatusBadge>
                   <Button size="sm" variant="danger" onClick={() => setCancellingSchedule(schedule)} leadingIcon={<X className="h-4 w-4" />}>Cancel assignment</Button>
                 </div>

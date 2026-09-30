@@ -84,7 +84,7 @@ export function DemoControls() {
               {state?.geofenceVehicle ? `${state.geofenceVehicle.vanId} · ${state.geofenceVehicle.insideActiveZone ? 'inside the Active Zone' : 'outside the Active Zone'}` : 'Demo vehicle unavailable'}
             </p>
           </div>
-          <div className="flex flex-col gap-2 sm:flex-row">
+          <div className="dashboard-actions flex flex-col gap-2 sm:flex-row">
             <Button variant="outline" leadingIcon={<MapPin className="h-4 w-4" />} loading={running === 'geofence'} disabled={!state?.demoMode || Boolean(running)} onClick={() => void runSimulation('geofence')}>Simulate entry</Button>
             <Button leadingIcon={<Play className="h-4 w-4" />} loading={running === 'engine'} disabled={!state?.demoMode || Boolean(running)} onClick={() => void runSimulation('engine')}>Run dispatch engine</Button>
           </div>

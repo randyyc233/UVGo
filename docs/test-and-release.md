@@ -41,6 +41,8 @@ The suite uses the same services and Prisma/MySQL database path as the applicati
 
 ## Release gate
 
+Receipt upload tests use a separate temporary directory that is removed after the run. The PayPal receipt integration test authenticates its fixtures through the real authentication service, leaving the application login throttle unchanged and avoiding interference from earlier login tests.
+
 Run from the repository root:
 
 ```bash

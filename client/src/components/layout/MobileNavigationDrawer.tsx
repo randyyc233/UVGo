@@ -52,7 +52,7 @@ export function MobileNavigationDrawer({ open, items, label, onClose, onLogout }
 
   if (!open) return null;
   return createPortal(
-    <div className="fixed inset-0 z-[60] lg:hidden">
+    <div className="dashboard-shell fixed inset-0 z-[60] lg:hidden">
       <button type="button" className="absolute inset-0 bg-text-primary/45" aria-label="Close navigation" onClick={onClose} />
       <aside ref={drawerRef} id="mobile-app-navigation" role="dialog" aria-modal="true" aria-label={label} className="relative flex h-full w-[min(20rem,88vw)] flex-col overflow-y-auto bg-surface p-5 shadow-floating">
         <div className="flex items-center justify-between">
@@ -63,7 +63,7 @@ export function MobileNavigationDrawer({ open, items, label, onClose, onLogout }
         <nav className="mt-5 flex flex-col gap-1" aria-label={`${label} full navigation`}>
           {items.map((item) => {
             const Icon = item.icon;
-            return <NavLink key={item.href} to={item.href} onClick={onClose} className={({ isActive }) => cn('flex min-h-touch items-center gap-3 rounded-control px-4 text-sm font-semibold', isActive ? 'bg-primary-dark text-white' : 'text-text-secondary hover:bg-primary-soft hover:text-primary-dark')}><Icon className="h-5 w-5" aria-hidden="true" /><span className="flex-1">{item.label}</span>{item.badge ? <span className="rounded-pill bg-danger-soft px-2 py-1 text-xs text-danger">{item.badge}</span> : null}</NavLink>;
+            return <NavLink key={item.href} to={item.href} onClick={onClose} className={({ isActive }) => cn('dashboard-nav-link flex min-h-touch items-center gap-3 rounded-control px-4 py-2.5 text-sm font-semibold', isActive ? 'bg-primary-soft text-primary-dark' : 'text-text-secondary hover:bg-primary-soft hover:text-primary-dark')}><Icon className="h-5 w-5" aria-hidden="true" /><span className="flex-1">{item.label}</span>{item.badge ? <span className="rounded-pill bg-danger-soft px-2 py-1 text-xs text-danger">{item.badge}</span> : null}</NavLink>;
           })}
         </nav>
         <button

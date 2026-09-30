@@ -29,7 +29,7 @@ export function StatusBadge({ children, tone = 'neutral', dot = false, className
   return (
     <span
       className={cn(
-        'inline-flex min-h-6 w-fit items-center gap-1.5 rounded-pill border px-2.5 py-1 text-xs font-semibold leading-none',
+        'ui-status inline-flex min-h-6 w-fit items-center gap-1.5 rounded-pill border px-2.5 py-1 text-xs font-semibold leading-none',
         toneClasses[tone],
         className,
       )}

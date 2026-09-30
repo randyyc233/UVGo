@@ -25,11 +25,11 @@ export const gcashReservationSchema = paypalReservationSchema.extend({
 
 /**
  * The hosted (dashboard-configured) PayPal button is charged on PayPal's own
- * checkout page, so the passenger reports back the reference from their PayPal
- * receipt and a dispatcher verifies it — the same shape as a GCash receipt.
+ * checkout page, so the passenger uploads their PayPal receipt and may include
+ * its reference for dispatcher verification — the same shape as a GCash receipt.
  */
 export const paypalHostedReservationSchema = paypalReservationSchema.extend({
-  paypalTransactionReference: z.string().trim().min(1, 'Enter the PayPal transaction reference.').max(100),
+  paypalTransactionReference: z.string().trim().max(100).optional().default(''),
 });
 
 export const rescheduleSchema = z.object({

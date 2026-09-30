@@ -5,6 +5,7 @@ import { App } from './App';
 import { AuthProvider } from './auth/AuthProvider';
 import { ToastProvider } from './components/ui';
 import './index.css';
+import './styles/dashboard.css';
 
 const rootElement = document.getElementById('root');
 
