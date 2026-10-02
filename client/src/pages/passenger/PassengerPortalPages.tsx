@@ -3,7 +3,7 @@ import {
   Bell,
   CalendarClock,
   CheckCheck,
-  CheckCircle2,
+  ChevronDown,
   ChevronRight,
   MapPin,
   Plus,
@@ -11,15 +11,17 @@ import {
   TicketCheck,
   Trash2,
 } from 'lucide-react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import { apiRequest, ApiError } from '../../api/http';
 import { VanSeatPicker } from '../../components/passenger/VanSeatPicker';
 import { ReservationAction } from '../../components/passenger/ReservationAction';
+import { PayPalCheckout } from '../../components/passenger/PayPalCheckout';
 import { ScheduleTripCard } from '../../components/passenger/ScheduleTripCard';
 import { useMobileSectionScroll } from '../../hooks/useMobileSectionScroll';
 import { Button, Card, ConfirmationDialog, EmptyState, LoadingSkeleton, StatusBadge, useToast } from '../../components/ui';
 import { usePassengerBooking, usePassengerBookings, usePassengerNotifications } from '../../hooks/usePassengerData';
 import { formatDateTime12, formatTime12 } from '../../lib/dateTime';
+import { cn } from '../../lib/cn';
 import type { GoaTrip, PassengerBooking, PassengerNotification, TripSeat } from '../../types/passenger';
 
 function bookingDate(value: string) {
@@ -31,9 +33,9 @@ function bookingTime(value: string) {
 }
 
 function statusTone(status: string): 'success' | 'warning' | 'info' | 'danger' | 'neutral' {
-  if (status === 'confirmed') return 'success';
-  if (status === 'payment_rejected' || status === 'payment_failed' || status === 'rejected' || status === 'forfeited') return 'danger';
-  if (status === 'pending_verification' || status === 'pending_payment') return 'warning';
+  if (status === 'confirmed' || status === 'verified' || status === 'captured') return 'success';
+  if (status === 'payment_rejected' || status === 'payment_failed' || status === 'rejected' || status === 'failed' || status === 'forfeited') return 'danger';
+  if (status === 'pending_verification' || status === 'pending_payment' || status === 'pending') return 'warning';
   if (status === 'rescheduled' || status === 'reallocated') return 'info';
   return 'neutral';
 }
@@ -59,19 +61,17 @@ function BookingCard({ booking }: { booking: PassengerBooking }) {
   return (
     <Link to={`/passenger/bookings/${booking.reference}`} className="block rounded-card border border-border bg-white p-4 shadow-card transition hover:border-primary/50">
       <div className="flex items-start justify-between gap-3">
-        <div>
-          <p className="text-xs font-bold uppercase tracking-[0.1em] text-primary">Goa · {booking.vanId}</p>
-          <dl className="mt-2 grid gap-2 text-sm">
-            <div><dt className="text-xs font-semibold text-text-secondary">Travel date</dt><dd className="font-bold">{bookingDate(booking.departureTime)}</dd></div>
-            <div className="flex flex-wrap gap-x-6 gap-y-1">
-              <div><dt className="text-xs font-semibold text-text-secondary">Loading time</dt><dd className="font-bold">{bookingTime(booking.boardingStartTime)}</dd></div>
-              <div><dt className="text-xs font-semibold text-text-secondary">Departure time</dt><dd className="font-bold">{bookingTime(booking.departureTime)}</dd></div>
-            </div>
-          </dl>
-        </div>
+        <p className="min-w-0 break-all text-xs font-bold uppercase tracking-[0.1em] text-primary">Goa · {booking.vanId}</p>
         <StatusBadge tone={statusTone(displayStatus)}>{statusLabel(displayStatus)}</StatusBadge>
       </div>
-      <div className="mt-4 flex items-center justify-between border-t border-border pt-3 text-sm"><span className="text-text-secondary">Seats {booking.seats.map((seat) => `#${seat}`).join(', ')} · {booking.reference}</span><ChevronRight className="h-4 w-4 text-primary" /></div>
+      <dl className="mt-3 grid gap-2 text-sm">
+        <div><dt className="text-xs font-semibold text-text-secondary">Travel date</dt><dd className="font-bold">{bookingDate(booking.departureTime)}</dd></div>
+        <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 text-xs sm:justify-start sm:gap-x-6 sm:text-sm">
+          <div className="flex items-baseline gap-1.5"><dt className="font-semibold text-text-secondary">Loading<span className="hidden sm:inline"> time</span></dt><dd className="whitespace-nowrap font-bold">{bookingTime(booking.boardingStartTime)}</dd></div>
+          <div className="flex items-baseline gap-1.5"><dt className="font-semibold text-text-secondary">Departure<span className="hidden sm:inline"> time</span></dt><dd className="whitespace-nowrap font-bold">{bookingTime(booking.departureTime)}</dd></div>
+        </div>
+      </dl>
+      <div className="mt-4 flex items-center justify-between gap-2 border-t border-border pt-3 text-sm"><span className="min-w-0 break-words text-text-secondary">Seats {booking.seats.map((seat) => `#${seat}`).join(', ')} · {booking.reference}</span><ChevronRight className="h-4 w-4 shrink-0 text-primary" /></div>
     </Link>
   );
 }
@@ -103,9 +103,11 @@ export function MyBookingsPage() {
 }
 
 export function BookingDetailsPage() {
+  const navigate = useNavigate();
   const { reference = '' } = useParams();
   const { booking, setBooking, loading, error, setError } = usePassengerBooking(reference);
   const [rescheduling, setRescheduling] = useState(false);
+  const [paymentDetailsExpanded, setPaymentDetailsExpanded] = useState(false);
   const [date, setDate] = useState(() => { const value = new Date(); value.setDate(value.getDate() + 2); return value.toISOString().slice(0, 10); });
   const [trips, setTrips] = useState<GoaTrip[]>([]);
   const [targetTrip, setTargetTrip] = useState<GoaTrip | null>(null);
@@ -140,17 +142,89 @@ export function BookingDetailsPage() {
   if (loading && !booking) return <Card className="p-5"><LoadingSkeleton lines={7} /></Card>;
   if (!booking) return <EmptyState icon={<TicketCheck className="h-6 w-6" />} title="Booking not found" description={error ?? 'This booking is unavailable.'} />;
   const displayStatus = bookingDisplayStatus(booking);
-  return <div className="reservation-flow mx-auto max-w-5xl"><Link to="/passenger/bookings" className="mb-4 inline-flex items-center gap-2 text-sm font-bold text-primary"><ChevronRight className="h-4 w-4 rotate-180" />Back to bookings</Link>{booking.payment?.status === 'rejected' ? <div role="alert" className="mb-5 rounded-card border border-danger/25 bg-danger-soft p-4 text-danger"><p className="font-extrabold">Payment rejected</p><p className="mt-1 text-sm">{booking.payment.rejectionReason ?? 'The dispatcher rejected the payment report. Check Notifications for details.'}</p></div> : null}<div className="grid gap-5 lg:grid-cols-[1.25fr_0.75fr]"><Card className="p-5 sm:p-7"><div className="flex flex-wrap items-start justify-between gap-3"><div><p className="text-xs font-bold uppercase tracking-[0.12em] text-primary">Booking details</p><h2 className="mt-1 text-2xl font-black">{booking.reference}</h2></div><StatusBadge tone={statusTone(displayStatus)}>{statusLabel(displayStatus)}</StatusBadge></div><div className="mt-6 grid gap-4 sm:grid-cols-2"><div className="rounded-control bg-cream p-4"><MapPin className="h-5 w-5 text-primary" /><p className="mt-2 font-bold">{booking.origin}</p><p className="text-sm text-text-secondary">to {booking.destination}</p></div><div className="rounded-control bg-cream p-4"><CalendarClock className="h-5 w-5 text-primary" /><dl className="mt-2 grid gap-3 text-sm"><div><dt className="text-xs text-text-secondary">Travel date</dt><dd className="font-bold">{bookingDate(booking.departureTime)}</dd></div><div className="flex flex-wrap gap-x-6 gap-y-2"><div><dt className="text-xs text-text-secondary">Loading time</dt><dd className="font-bold">{bookingTime(booking.boardingStartTime)}</dd></div><div><dt className="text-xs text-text-secondary">Departure time</dt><dd className="font-bold">{bookingTime(booking.departureTime)}</dd></div></div></dl><p className="mt-2 text-sm text-text-secondary">{booking.vanId}</p></div><div className="rounded-control bg-cream p-4"><TicketCheck className="h-5 w-5 text-primary" /><p className="mt-2 font-bold">Seats {booking.seats.map((seat) => `#${seat}`).join(', ')}</p><p className="text-sm text-text-secondary">{booking.seatCount} passenger(s)</p></div><div className="rounded-control bg-cream p-4"><CheckCircle2 className="h-5 w-5 text-primary" /><p className="mt-2 font-bold capitalize">{booking.payment?.status.replaceAll('_', ' ')}</p><p className="text-sm text-text-secondary">{paymentMethodLabel(booking.payment?.method)}</p></div></div><div className="mt-5 border-t border-border pt-5"><p className="text-sm font-bold">Reschedule policy</p><p className="mt-1 text-sm text-text-secondary">{booking.rescheduleMessage}</p><Button className="dashboard-primary-action mt-4" variant="outline" disabled={!booking.canReschedule} onClick={() => { setRescheduling(true); setDateScrollRequest((current) => current + 1); }} leadingIcon={<RefreshCw className="h-4 w-4" />}>Reschedule</Button><p className="mt-3 text-xs text-text-muted">No cancellation or refund action is available.</p></div></Card><Card className="h-fit p-5"><p className="text-sm font-bold">Payment summary</p><div className="mt-4 space-y-3 text-sm"><div className="flex justify-between gap-3"><span className="text-text-secondary">Method</span><span className="font-semibold">{paymentMethodLabel(booking.payment?.method)}</span></div><div><p className="text-text-secondary">Transaction ID/reference</p><p className="mt-1 break-all font-bold text-text-primary">{booking.payment?.transactionReference ?? 'Not supplied'}</p></div><div className="flex justify-between"><span className="text-text-secondary">Fare</span><span>₱{booking.fareAmount.toFixed(2)}</span></div><div className="rounded-control border border-primary/20 bg-primary-soft p-4 text-primary-dark"><p className="text-sm font-bold">Total Price</p><p className="mt-1 text-xl font-bold">₱{booking.totalAmount.toFixed(2)}</p></div></div></Card></div>
-    {rescheduling ? <Card className="mt-5 p-5 sm:p-7">
+  return <div className="reservation-flow mx-auto min-w-0 max-w-5xl">
+    <Link to="/passenger/bookings" className="mb-3 inline-flex min-h-touch items-center gap-2 text-sm font-bold text-primary sm:mb-4"><ChevronRight className="h-4 w-4 rotate-180" aria-hidden="true" />Back to bookings</Link>
+    {booking.payment?.status === 'rejected' ? <div role="alert" className="mb-4 rounded-card border border-danger/25 bg-danger-soft p-3 text-danger sm:mb-5 sm:p-4"><p className="text-sm font-extrabold sm:text-base">Payment rejected</p><p className="mt-1 text-sm leading-5">{booking.payment.rejectionReason ?? 'The dispatcher rejected the payment report. Check Notifications for details.'}</p></div> : null}
+    <div className="grid min-w-0 gap-4 sm:gap-5 lg:grid-cols-[1.25fr_0.75fr] lg:items-start">
+      <Card className="min-w-0 p-4 sm:p-7">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <p className="text-xs font-bold uppercase tracking-[0.12em] text-primary">Booking details</p>
+          <StatusBadge tone={statusTone(displayStatus)}>{statusLabel(displayStatus)}</StatusBadge>
+        </div>
+        <h2 className="mt-2 select-all break-all text-lg font-black tracking-wide sm:text-2xl">{booking.reference}</h2>
+        <div className="mt-4 space-y-3 sm:mt-6">
+          <div className="flex items-start gap-3 rounded-control bg-cream p-3 sm:p-4">
+            <MapPin className="mt-0.5 h-4 w-4 shrink-0 text-primary sm:h-5 sm:w-5" aria-hidden="true" />
+            <div className="min-w-0"><p className="text-sm font-bold sm:text-base">{booking.origin}</p><p className="mt-0.5 text-sm text-text-secondary">to {booking.destination}</p></div>
+          </div>
+          <div className="rounded-control border border-border p-3 sm:p-4">
+            <div className="flex items-start gap-3">
+              <CalendarClock className="mt-0.5 h-4 w-4 shrink-0 text-primary sm:h-5 sm:w-5" aria-hidden="true" />
+              <div className="min-w-0"><p className="text-xs text-text-secondary">Travel date</p><p className="mt-0.5 text-sm font-bold sm:text-base">{bookingDate(booking.departureTime)}</p></div>
+            </div>
+            <dl className="mt-3 flex flex-wrap items-baseline justify-between gap-x-1 gap-y-2 border-t border-border pt-3 text-xs sm:justify-start sm:gap-x-6 sm:rounded-control sm:border-0 sm:bg-cream sm:p-3 sm:text-sm">
+              <div className="flex items-baseline gap-0.5 sm:gap-1.5"><dt className="text-text-secondary">Loading<span className="hidden sm:inline"> time</span></dt><dd className="whitespace-nowrap font-bold">{bookingTime(booking.boardingStartTime)}</dd></div>
+              <div className="flex items-baseline gap-0.5 sm:gap-1.5"><dt className="text-text-secondary">Departure<span className="hidden sm:inline"> time</span></dt><dd className="whitespace-nowrap font-bold">{bookingTime(booking.departureTime)}</dd></div>
+            </dl>
+            <p className="mt-2 break-all text-xs text-text-secondary">Van · {booking.vanId}</p>
+          </div>
+          <div className="rounded-control bg-cream p-3 sm:p-4">
+            <div className="flex flex-wrap items-center justify-between gap-2"><p className="flex items-center gap-2 text-sm font-bold"><TicketCheck className="h-4 w-4 text-primary" aria-hidden="true" />Selected seats</p><p className="text-xs text-text-secondary">{booking.seatCount} passenger{booking.seatCount === 1 ? '' : 's'}</p></div>
+            <div className="mt-2 flex flex-wrap gap-1.5">{booking.seats.length ? booking.seats.map((seat) => <span key={seat} className="rounded-lg border border-primary/20 bg-primary-soft px-2.5 py-1 text-sm font-bold text-primary-dark">Seat #{seat}</span>) : <p className="text-sm text-text-secondary">No seats currently reserved</p>}</div>
+          </div>
+        </div>
+      </Card>
+      <Card className="min-w-0 p-4 sm:p-5 lg:row-span-2">
+        <h2 className="text-sm font-extrabold sm:text-base">Payment summary</h2>
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-sm"><span className="text-text-secondary">{paymentMethodLabel(booking.payment?.method)}</span><StatusBadge tone={statusTone(booking.payment?.status ?? '')}>{booking.payment ? statusLabel(booking.payment.status) : 'Not available'}</StatusBadge></div>
+        <div className="mt-3 flex items-center justify-between gap-3 rounded-control border border-primary/20 bg-primary-soft p-3 text-primary-dark sm:p-4"><p className="text-sm font-bold">Total Price</p><p className="text-xl font-black">₱{booking.totalAmount.toFixed(2)}</p></div>
+        <button type="button" aria-expanded={paymentDetailsExpanded} aria-controls="passenger-booking-payment-details" onClick={() => setPaymentDetailsExpanded((expanded) => !expanded)} className="mt-2 flex min-h-touch w-full items-center justify-between gap-3 text-left text-sm font-bold text-primary sm:hidden">
+          {paymentDetailsExpanded ? 'Hide payment details' : 'View payment details'}<ChevronDown className={cn('h-4 w-4 shrink-0 transition-transform', paymentDetailsExpanded && 'rotate-180')} aria-hidden="true" />
+        </button>
+        <dl id="passenger-booking-payment-details" className={cn('space-y-3 border-t border-border pt-3 text-sm sm:mt-4 sm:block sm:pt-4', paymentDetailsExpanded ? 'block' : 'hidden')}>
+          <div><dt className="text-xs text-text-secondary">Transaction ID/reference</dt><dd className="mt-1 break-all font-bold">{booking.payment?.transactionReference ?? 'Not supplied'}</dd></div>
+          <div className="flex flex-wrap justify-between gap-2"><dt className="text-text-secondary">Fare</dt><dd className="font-semibold">₱{booking.fareAmount.toFixed(2)}</dd></div>
+        </dl>
+      </Card>
+      <Card className="p-4 sm:p-5 lg:col-start-1">
+        <h2 className="text-sm font-extrabold sm:text-base">Reschedule policy</h2>
+        <dl className="mt-3 grid grid-cols-2 gap-3 text-xs sm:text-sm">
+          <div><dt className="text-text-secondary">Reschedule before</dt><dd className="mt-1 font-bold">{formatDateTime12(booking.rescheduleCutoffTime)}</dd></div>
+          <div><dt className="text-text-secondary">Attempts remaining</dt><dd className="mt-1 font-bold">{booking.reschedulesRemaining} of {booking.rescheduleLimit}</dd></div>
+        </dl>
+        <p className="mt-1 text-xs leading-5 text-text-secondary sm:text-sm">{booking.rescheduleMessage}</p>
+        <Button className="dashboard-primary-action mt-3 w-full sm:mt-4 sm:w-auto" variant="outline" disabled={!booking.canReschedule} onClick={() => { setRescheduling(true); setDateScrollRequest((current) => current + 1); }} leadingIcon={<RefreshCw className="h-4 w-4" />}>Reschedule</Button>
+        <p className="mt-2 text-xs text-text-muted sm:mt-3">No cancellation or refund action is available.</p>
+      </Card>
+    </div>
+    {(booking.discountAmount ?? 0) > 0 ? <Card className="mt-4 p-4 sm:mt-5 sm:p-5">
+      <h2 className="text-base font-extrabold sm:text-lg">Student & senior discount</h2>
+      <p className="mt-2 text-xs leading-5 sm:text-sm">{booking.studentPassengers} student(s) · {booking.seniorPassengers} senior citizen(s) · 20% off each eligible seat</p>
+      <p className="mt-2 text-sm font-bold text-primary-dark sm:text-base">Discount saved: ₱{booking.discountAmount!.toFixed(2)}</p>
+      <p className="mt-2 text-xs leading-5 text-text-secondary sm:text-sm sm:leading-6">Every discounted passenger must bring a valid student or senior citizen ID. Eligibility is checked at the terminal before boarding.</p>
+    </Card> : null}
+    {booking.status === 'pending_payment' && booking.payment?.method === 'paypal' && booking.payment.transactionReference ? <Card className="mt-4 p-4 sm:mt-5 sm:p-7">
+      <h2 className="text-lg font-extrabold sm:text-xl">Complete your PayPal payment</h2>
+      <p className="mt-2 text-sm leading-6 text-text-secondary">Your seats are held for this checkout. If you already approved payment, check its status before paying again.</p>
+      <div className="mt-5"><ReservationAction total={booking.totalAmount}>
+        <PayPalCheckout tripId={booking.tripId} seats={booking.seats} contact=""
+          existingOrder={{ reference: booking.reference, orderId: booking.payment.transactionReference }}
+          onConfirmed={setBooking} onReleased={() => navigate('/passenger/bookings')}
+          onSeatUnavailable={async (message) => { setError(message); }} />
+      </ReservationAction></div>
+    </Card> : null}
+    {rescheduling && booking.canReschedule ? <Card className="mt-4 p-4 sm:mt-5 sm:p-7">
       <div ref={dateSection} tabIndex={-1} className="reservation-scroll-target" aria-label="Reschedule date selection">
-        <h2 className="text-xl font-black">Reschedule Goa booking</h2>
+        <h2 className="text-lg font-black sm:text-xl">Reschedule Goa booking</h2>
         <p className="mt-2 text-sm leading-6 text-text-secondary">Choose another scheduled trip and exactly {booking.seatCount} seat{booking.seatCount === 1 ? '' : 's'}.</p>
         <form className="mt-5 grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto_auto] sm:items-end" onSubmit={(event) => { event.preventDefault(); void findTrips(); }}>
           <label className="block min-w-0 text-sm font-semibold">New departure date
             <input type="date" value={date} onChange={(event) => setDate(event.target.value)} className="mt-1.5 min-h-touch w-full min-w-0 rounded-control border border-border-strong px-3 py-2.5 text-base" />
           </label>
-          <Button type="submit" loading={actionLoading}>Search Trips</Button>
-          <Button type="button" variant="ghost" onClick={() => setRescheduling(false)}>Close</Button>
+          <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2 sm:contents">
+            <Button type="submit" loading={actionLoading}>Search Trips</Button>
+            <Button type="button" variant="ghost" onClick={() => setRescheduling(false)}>Close</Button>
+          </div>
         </form>
       </div>
       <div ref={schedulesSection} tabIndex={-1} className="reservation-scroll-target mt-5" aria-label="Available reschedule schedules">

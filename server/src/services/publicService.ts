@@ -6,7 +6,7 @@ import {
   TripStatus,
   VehicleStatus,
 } from '@prisma/client';
-import { DEFAULT_GOA_FARE } from '../config/fare.js';
+import { getGoaPublicFare } from './publicFareService.js';
 import { NCEBT } from '../config/terminal.js';
 import { passengerCapacityOf } from '../config/vehicle.js';
 import { prisma } from '../lib/prisma.js';
@@ -119,7 +119,7 @@ export async function getPublicRoutes() {
   // Route-card status must describe the same live queue shown on the public
   // departure board. An active future Trip is only a schedule; it is not a
   // public "next departure" until its van has an operational queue entry.
-  const publicBoard = await getPublicDepartures();
+  const [publicBoard, goaFare] = await Promise.all([getPublicDepartures(), getGoaPublicFare()]);
   const nextGoaDeparture = publicBoard.departures.find(
     (departure) => departure.routeCode === 'goa' && departure.departureTime,
   )?.departureTime ?? null;
@@ -133,7 +133,7 @@ export async function getPublicRoutes() {
         destination: destinationNames.GOA,
         protocol: 'Goso',
         reservable: true,
-        fare: DEFAULT_GOA_FARE,
+        fare: goaFare,
         nextDeparture: nextGoaDeparture,
         summary: 'Scheduled departures with advance seat reservations.',
       },

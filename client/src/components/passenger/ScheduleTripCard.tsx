@@ -1,6 +1,6 @@
 import { CheckCircle2, Circle, Clock3 } from 'lucide-react';
 import { cn } from '../../lib/cn';
-import { formatTime12 } from '../../lib/dateTime';
+import { formatDateTime12, formatTime12 } from '../../lib/dateTime';
 import type { GoaTrip } from '../../types/passenger';
 
 interface ScheduleTripCardProps {
@@ -40,6 +40,7 @@ export function ScheduleTripCard({ trip, selected, disabled = false, onSelect }:
         <span><span className="block text-sm text-text-secondary">Departure time</span><span className="block text-lg font-extrabold">{formatTime12(trip.departureTime)}</span></span>
       </span>
       <span className="mt-3 block break-words text-sm text-text-secondary">{trip.vanId} · Goa scheduled trip</span>
+      <span className="mt-1 block text-xs text-text-secondary">Reservations close {formatDateTime12(trip.reservationCutoffTime)}</span>
       <span className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-border pt-3">
         <span><span className="block font-extrabold text-primary-dark">₱{trip.fare.toFixed(2)} <span className="text-sm font-normal text-text-secondary">/ seat</span></span><span className="block text-sm text-text-secondary">{trip.availableSeats} seat{trip.availableSeats === 1 ? '' : 's'} left · Up to {limit} passenger{limit === 1 ? '' : 's'}</span></span>
         <span className={cn('text-sm font-bold', selected ? 'text-primary-dark' : 'text-text-secondary')}>

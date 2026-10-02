@@ -130,11 +130,11 @@ export async function admitAcceptedGosoSchedulesForDay(now = new Date()) {
       },
       data: { status: QueueStatus.REPLACED },
     });
-    // A van may have completed an earlier trip today and still be marked
+    // A van may have completed an earlier trip and still be marked
     // ON_TRIP when a later Goso occurrence becomes due. The later occurrence
     // is a new scheduled queue slot whether it came from a one-time schedule
     // or a recurring rule, so release only vans whose next loading time is
-    // after their latest recorded departure.
+    // after their latest recorded departure, including prior service days.
     const scheduledOnTripVehicles = await tx.vehicle.findMany({
       where: { route: RouteCode.GOA, status: VehicleStatus.ON_TRIP },
       include: {
@@ -153,7 +153,7 @@ export async function admitAcceptedGosoSchedulesForDay(now = new Date()) {
       const latestDeparture = await tx.trip.aggregate({
         where: {
           vehicleId: vehicle.id,
-          departedAt: { gte: day.start, lt: day.end },
+          departedAt: { not: null },
         },
         _max: { departedAt: true },
       });

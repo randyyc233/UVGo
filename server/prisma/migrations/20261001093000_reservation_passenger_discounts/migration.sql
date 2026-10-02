@@ -1,0 +1,4 @@
+ALTER TABLE `Reservation`
+  ADD COLUMN `studentPassengers` INTEGER NOT NULL DEFAULT 0,
+  ADD COLUMN `seniorPassengers` INTEGER NOT NULL DEFAULT 0,
+  ADD COLUMN `discountAmount` DECIMAL(10, 2) NOT NULL DEFAULT 0;

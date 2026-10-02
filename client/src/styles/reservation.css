@@ -30,6 +30,36 @@
     display: block;
   }
 
+  .reservation-passenger-details .reservation-action {
+    flex-direction: row;
+    align-items: center;
+    gap: 0.75rem;
+    padding-top: 0.75rem;
+    padding-bottom: calc(0.75rem + env(safe-area-inset-bottom));
+  }
+
+  .reservation-passenger-details .reservation-action-price {
+    flex: 0 0 auto;
+    max-width: 40%;
+  }
+
+  .reservation-passenger-details .reservation-action-price > span {
+    font-size: 0.75rem;
+  }
+
+  .reservation-passenger-details .reservation-action-price > strong {
+    font-size: 1.125rem;
+  }
+
+  .dashboard-shell .reservation-passenger-details .reservation-action > .ui-button {
+    flex: 1;
+    width: auto;
+    min-width: 0;
+    padding-right: 0.75rem;
+    padding-left: 0.75rem;
+    font-size: 0.875rem;
+  }
+
   .dashboard-shell .reservation-action > .ui-button {
     width: 100%;
     min-height: 3rem;
@@ -37,7 +67,7 @@
   }
 
   /* Leave room for native keyboard scrolling; the action returns inline while editing. */
-  .reservation-flow:has(input:not(:disabled):focus, select:focus) .reservation-action {
+  .reservation-flow:has(input:not(:disabled):not([type="checkbox"]):not([type="radio"]):not([type="file"]):focus) .reservation-action {
     position: static;
     border-radius: 0.625rem;
     box-shadow: none;

@@ -31,7 +31,7 @@ import {
   recalculateTayaReadiness,
   runDispatchEngine,
 } from '../src/services/automationService.js';
-import { applyQueueAction, changeDispatcherPassword, decideGcashPayment, deleteAllDispatchLogs, deleteDispatchLog, dismissAllDispatcherAlerts, dismissDispatcherAlert, getDispatcherDashboard, getDispatcherPayments, getDispatcherQueue, getFleetSnapshot, markDispatcherAlertRead, sendDriverAnnouncement, updateDispatcherProfile } from '../src/services/dispatcherService.js';
+import { applyQueueAction, changeDispatcherPassword, decideGcashPayment, deleteAllDispatchLogs, deleteDispatchLog, dismissAllDispatcherAlerts, dismissDispatcherAlert, dismissDispatcherPayment, getDispatcherDashboard, getDispatcherPayments, getDispatcherQueue, getFleetSnapshot, markDispatcherAlertRead, sendDriverAnnouncement, updateDispatcherProfile } from '../src/services/dispatcherService.js';
 import {
   createManagedDriver,
   createManagedSchedule,
@@ -53,12 +53,14 @@ import {
   getTripSeats,
   markAllPassengerNotificationsRead,
   markPassengerNotificationRead,
+  quoteReservationFare,
   releasePaypalReservation,
   reschedulePassengerBooking,
   searchGoaTrips,
   updatePassengerProfile,
 } from '../src/services/passengerService.js';
 import { getPublicDepartures, getPublicRoutes } from '../src/services/publicService.js';
+import { getDispatcherPublicFare, updateDispatcherPublicFare } from '../src/services/publicFareService.js';
 import { AppError } from '../src/utils/AppError.js';
 import { queueActionSchema } from '../src/validators/dispatcherValidators.js';
 import { gcashReservationSchema, paypalHostedReservationSchema, rescheduleSchema, tripSearchSchema } from '../src/validators/passengerValidators.js';
@@ -71,6 +73,8 @@ import { createBackupDispatcher, getRouteDispatchers } from '../src/services/dis
 import { getDemoState } from '../src/services/demoService.js';
 import { createPayPalOrder } from '../src/services/paypalService.js';
 import { getTayaWeeklySchedule, saveTayaWeeklySchedule, syncTayaDailyQueue } from '../src/services/tayaQueueService.js';
+import { dismissDepartureHistory, getDepartureHistory } from '../src/services/departureHistoryService.js';
+import { reservationCutoffFor } from '../src/config/dispatch.js';
 
 if (!process.env.UVGO_ISOLATED_TEST_DATABASE || new URL(process.env.DATABASE_URL!).pathname !== `/${process.env.UVGO_ISOLATED_TEST_DATABASE}`) {
   throw new Error('Use npm test: this suite resets fixtures and must run in its isolated test database.');
@@ -945,6 +949,68 @@ test('8b. passengers can update their profile and securely change their password
   assert.equal(afterPasswordChange.tokenVersion, before.tokenVersion + 1);
 });
 
+test('public Goa fare is persistent and shared without altering scheduled fares or bookings', async () => {
+  assert.equal((await getPublicRoutes()).routes.find((route) => route.code === 'goa')?.fare, DEFAULT_GOA_FARE);
+  const before = {
+    trips: await prisma.trip.findMany({ orderBy: { id: 'asc' } }),
+    schedules: await prisma.weeklySchedule.findMany({ orderBy: { id: 'asc' } }),
+    reservations: await prisma.reservation.findMany({ orderBy: { id: 'asc' } }),
+    payments: await prisma.payment.findMany({ orderBy: { id: 'asc' } }),
+  };
+  await updateDispatcherPublicFare('seed_user_dispatcher', 125.50);
+  assert.equal((await getDispatcherPublicFare('seed_user_dispatcher')).fareAmount, 125.50);
+  const publicRoutes = await getPublicRoutes();
+  assert.equal(publicRoutes.routes.find((route) => route.code === 'goa')?.fare, 125.50);
+  assert.equal(publicRoutes.routes.find((route) => route.code === 'legazpi')?.fare, null);
+  assert.equal(Number((await prisma.publicRouteFare.findUniqueOrThrow({ where: { route: RouteCode.GOA } })).fareAmount), 125.50);
+  const backup = await createBackupDispatcher('seed_user_dispatcher', RouteCode.GOA, {
+    name: 'Fare Backup', email: 'fare.backup@uvgo.test', contact: '09170000099', password: 'Temporary123!',
+  });
+  const backupId = backup.dispatchers.find((dispatcher) => dispatcher.email === 'fare.backup@uvgo.test')!.id;
+  assert.equal((await getDispatcherPublicFare(backupId)).fareAmount, 125.50);
+  await updateDispatcherPublicFare(backupId, 130);
+  assert.equal((await getDispatcherPublicFare('seed_user_dispatcher')).fareAmount, 130);
+  assert.deepEqual({
+    trips: await prisma.trip.findMany({ orderBy: { id: 'asc' } }),
+    schedules: await prisma.weeklySchedule.findMany({ orderBy: { id: 'asc' } }),
+    reservations: await prisma.reservation.findMany({ orderBy: { id: 'asc' } }),
+    payments: await prisma.payment.findMany({ orderBy: { id: 'asc' } }),
+  }, before);
+});
+
+test('public Goa fare endpoint permits only Goa dispatchers and validates currency amounts', async () => {
+  const server = app.listen(0);
+  try {
+    await new Promise<void>((resolve) => server.once('listening', resolve));
+    const address = server.address();
+    assert.ok(address && typeof address === 'object');
+    const base = `http://127.0.0.1:${address.port}/api`;
+    const endpoint = `${base}/dispatcher/profile/public-fare`;
+    const cookie = async (email: string) => `${SESSION_COOKIE}=${(await authenticateUser(email, 'UVGoDemo123!')).token}`;
+    const goa = await cookie('dispatcher@uvgo.demo');
+    const legazpi = await cookie('dispatcher.legazpi@uvgo.demo');
+    const patch = (amount: unknown, session?: string) => fetch(endpoint, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json', ...(session ? { Cookie: session } : {}) }, body: JSON.stringify({ fareAmount: amount }),
+    });
+    assert.equal((await patch(125)).status, 401);
+    assert.equal((await patch(125, await cookie('passenger@uvgo.demo'))).status, 403);
+    assert.equal((await patch(125, await cookie('driver.rodel@uvgo.demo'))).status, 403);
+    assert.equal((await patch(125, legazpi)).status, 403);
+    assert.equal((await fetch(endpoint, { headers: { Cookie: legazpi } })).status, 403);
+    for (const invalid of [0, -1, 10000.01, 108.001, null, '125', '']) assert.equal((await patch(invalid, goa)).status, 422);
+    assert.equal(await prisma.publicRouteFare.count(), 0);
+    assert.equal((await patch(125.50, goa)).status, 200);
+    const reloaded = await fetch(endpoint, { headers: { Cookie: goa } });
+    assert.equal(reloaded.status, 200);
+    assert.equal((await reloaded.json() as { publicFare: { fareAmount: number } }).publicFare.fareAmount, 125.50);
+    const publicResponse = await fetch(`${base}/public/routes`);
+    assert.equal(publicResponse.status, 200);
+    assert.equal((await publicResponse.json() as { routes: Array<{ code: string; fare: number | null }> }).routes.find((route) => route.code === 'goa')?.fare, 125.50);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
 test('8c. dispatchers can update personal details without changing their role or route', async () => {
   const before = await prisma.user.findUniqueOrThrow({ where: { id: 'seed_user_dispatcher' } });
   const profile = await updateDispatcherProfile('seed_user_dispatcher', {
@@ -1156,8 +1222,8 @@ test('11. dispatcher GCash approval confirms the booking', async () => {
   assert.equal(payment?.reservation.status, ReservationStatus.CONFIRMED);
 });
 
-test('12. rescheduling is blocked inside 24 hours', async () => {
-  await prisma.trip.update({ where: { id: 'seed_trip_goa_morning' }, data: { scheduledOrTriggeredTime: new Date(Date.now() + 12 * 60 * 60_000) } });
+test('12. rescheduling is blocked inside five hours of loading', async () => {
+  await prisma.trip.update({ where: { id: 'seed_trip_goa_morning' }, data: { boardingStartTime: new Date(Date.now() + 4 * 60 * 60_000), scheduledOrTriggeredTime: new Date(Date.now() + 12 * 60 * 60_000) } });
   await assert.rejects(
     reschedulePassengerBooking('seed_user_passenger_ana', 'UVGO-DEMO-001', 'seed_trip_goa_day_two', [5]),
     (error: unknown) => error instanceof AppError && error.code === 'RESCHEDULE_WINDOW_CLOSED',
@@ -1546,6 +1612,84 @@ test('13b. a driver can cancel even when no replacement van is currently availab
   assert.equal(sourceQueue?.status, QueueStatus.REPLACED);
   assert.equal(sourceVehicle.status, VehicleStatus.UNAVAILABLE);
   assert.equal(reservation.tripId, assignment.tripId);
+});
+
+test('reviewed reservation deletion persists without changing bookings, seats, payments or operational records', async () => {
+  await decideGcashPayment('seed_user_dispatcher', RouteCode.GOA, 'seed_payment_gcash', 'approve', '');
+  const snapshot = async () => ({
+    reservations: await prisma.reservation.findMany({ orderBy: { id: 'asc' } }),
+    seats: await prisma.reservationSeat.findMany({ orderBy: { id: 'asc' } }),
+    payments: await prisma.payment.findMany({ orderBy: { id: 'asc' } }),
+    trips: await prisma.trip.findMany({ orderBy: { id: 'asc' } }),
+    logs: await prisma.dispatchLog.findMany({ orderBy: { id: 'asc' } }),
+    notifications: await prisma.notification.findMany({ orderBy: { id: 'asc' } }),
+  });
+  const before = await snapshot();
+  const dashboardBefore = await getDispatcherDashboard(RouteCode.GOA, 'seed_user_dispatcher');
+  const deleted = await dismissDispatcherPayment('seed_user_dispatcher', RouteCode.GOA, 'seed_payment_gcash');
+  assert.equal(deleted.gcash.some((payment) => payment.id === 'seed_payment_gcash'), false);
+  await dismissDispatcherPayment('seed_user_dispatcher', RouteCode.GOA, 'seed_payment_paypal');
+  await dismissDispatcherPayment('seed_user_dispatcher', RouteCode.GOA, 'seed_payment_gcash');
+  const reloaded = await getDispatcherPayments(RouteCode.GOA, 'seed_user_dispatcher');
+  assert.equal(reloaded.gcash.some((payment) => payment.id === 'seed_payment_gcash'), false);
+  assert.equal(reloaded.paypal.some((payment) => payment.id === 'seed_payment_paypal'), false);
+  assert.equal(await prisma.dispatcherAlertRead.count({ where: { userId: 'seed_user_dispatcher', alertKey: 'payment-list:seed_payment_gcash' } }), 1);
+  assert.deepEqual(await snapshot(), before);
+  assert.deepEqual((await getDispatcherDashboard(RouteCode.GOA, 'seed_user_dispatcher')).alerts, dashboardBefore.alerts);
+
+  const backup = await createBackupDispatcher('seed_user_dispatcher', RouteCode.GOA, {
+    name: 'Reservation Cleanup Backup', email: 'cleanup.backup@uvgo.test', contact: '09170000099', password: 'Temporary123!',
+  });
+  const backupId = backup.dispatchers.find((dispatcher) => dispatcher.email === 'cleanup.backup@uvgo.test')!.id;
+  assert.equal((await getDispatcherPayments(RouteCode.GOA, backupId)).gcash.some((payment) => payment.id === 'seed_payment_gcash'), true);
+});
+
+test('rejected reservation deletion keeps the rejection reason and duplicate transaction protection', async () => {
+  const input = { passengerId: 'seed_user_passenger_ana', tripId: 'seed_trip_goa_day_three', seats: [1], contact: '09170000001', gcashReference: 'DELETE-REJECTED-001', receiptImageKey: 'fixture.png', receiptMimeType: 'image/png' };
+  const booking = await createGcashReservation(input);
+  const payment = await prisma.payment.findFirstOrThrow({ where: { reservation: { reference: booking.reference } } });
+  await decideGcashPayment('seed_user_dispatcher', RouteCode.GOA, payment.id, 'reject', 'Amount does not match.');
+  const before = await getPassengerBooking(input.passengerId, booking.reference);
+  await dismissDispatcherPayment('seed_user_dispatcher', RouteCode.GOA, payment.id);
+  assert.deepEqual(await getPassengerBooking(input.passengerId, booking.reference), before);
+  assert.equal(before.payment?.rejectionReason, 'Amount does not match.');
+  assert.equal(await prisma.reservationSeat.count({ where: { reservationId: payment.reservationId } }), 0);
+  await assert.rejects(createGcashReservation(input), (error: unknown) => error instanceof AppError && error.code === 'PAYMENT_REFERENCE_ALREADY_REPORTED');
+  // Another decision response must not bring previously deleted entries back.
+  const afterDecision = await decideGcashPayment('seed_user_dispatcher', RouteCode.GOA, 'seed_payment_gcash', 'approve', '');
+  assert.equal(afterDecision.gcash.some((item) => item.id === payment.id), false);
+});
+
+test('reservation deletion endpoint enforces authentication, role, route and reviewed status', async () => {
+  const server = app.listen(0);
+  try {
+    await new Promise<void>((resolve) => server.once('listening', resolve));
+    const address = server.address();
+    assert.ok(address && typeof address === 'object');
+    const base = `http://127.0.0.1:${address.port}/api/dispatcher/payments`;
+    const cookie = async (email: string) => `${SESSION_COOKIE}=${(await authenticateUser(email, 'UVGoDemo123!')).token}`;
+    const goaCookie = await cookie('dispatcher@uvgo.demo');
+    const remove = (id: string, session?: string) => fetch(`${base}/${id}`, { method: 'DELETE', headers: session ? { Cookie: session } : {} });
+    assert.equal((await remove('seed_payment_paypal')).status, 401);
+    assert.equal((await remove('seed_payment_paypal', await cookie('passenger@uvgo.demo'))).status, 403);
+    assert.equal((await remove('seed_payment_paypal', await cookie('dispatcher.legazpi@uvgo.demo'))).status, 403);
+    assert.equal((await remove('missing-payment', goaCookie)).status, 404);
+    for (const status of [PaymentStatus.PENDING_VERIFICATION, PaymentStatus.PENDING, PaymentStatus.FAILED]) {
+      await prisma.payment.update({ where: { id: 'seed_payment_gcash' }, data: { status } });
+      assert.equal((await remove('seed_payment_gcash', goaCookie)).status, 409);
+    }
+    assert.equal(await prisma.dispatcherAlertRead.count({ where: { alertKey: { startsWith: 'payment-list:' } } }), 0);
+    const deleted = await remove('seed_payment_paypal', goaCookie);
+    assert.equal(deleted.status, 200);
+    const payload = await deleted.json() as { payments: { paypal: Array<{ id: string }> } };
+    assert.equal(payload.payments.paypal.some((payment) => payment.id === 'seed_payment_paypal'), false);
+    const reloaded = await fetch(base, { headers: { Cookie: goaCookie } });
+    assert.equal(reloaded.status, 200);
+    assert.equal((await reloaded.json() as typeof payload).payments.paypal.some((payment) => payment.id === 'seed_payment_paypal'), false);
+    assert.equal((await prisma.payment.findUniqueOrThrow({ where: { id: 'seed_payment_paypal' } })).status, PaymentStatus.CAPTURED);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
 });
 
 test('15. dispatchers can access only their assigned route', async () => {
@@ -3587,4 +3731,299 @@ test('54. a Goa driver can hold multiple schedules on the same Manila calendar d
       assignments: { some: { driverId: 'seed_user_driver_rodel' } },
     },
   }), 2);
+});
+
+for (const [route, dispatcherId, tripId] of [
+  [RouteCode.GOA, 'seed_user_dispatcher', 'seed_trip_goa_morning'],
+  [RouteCode.LEGAZPI, 'seed_user_dispatcher_legazpi', 'seed_trip_legazpi_loading'],
+] as const) {
+  test(`${route} departure history filters actual departures by Manila day and preserves operational data on deletion`, async () => {
+    const departedAt = new Date('2026-10-01T16:00:00.000Z'); // October 2 midnight in Manila.
+    const original = await prisma.trip.findUniqueOrThrow({ where: { id: tripId }, include: { vehicle: true } });
+    await prisma.trip.update({ where: { id: tripId }, data: { status: TripStatus.DEPARTED, departedAt } });
+    await prisma.passengerCount.create({ data: { vehicleId: original.vehicleId, tripId, count: 7, submittedByDriverId: original.vehicle.assignedDriverId!, timestamp: new Date(departedAt.getTime() - 1_000) } });
+    await prisma.passengerCount.create({ data: { vehicleId: original.vehicleId, tripId, count: 0, submittedByDriverId: original.vehicle.assignedDriverId!, timestamp: new Date(departedAt.getTime() + 1_000) } });
+    // Boundary fixtures use the same vehicle but are independent departed trips.
+    await prisma.trip.create({ data: { id: 'history-before-midnight', route, vehicleId: original.vehicleId, scheduledOrTriggeredTime: departedAt, fareAmount: 100, status: TripStatus.COMPLETED, departedAt: new Date(departedAt.getTime() - 1) } });
+    await prisma.trip.create({ data: { id: 'history-next-midnight', route, vehicleId: original.vehicleId, scheduledOrTriggeredTime: departedAt, fareAmount: 100, status: TripStatus.DEPARTED, departedAt: new Date(departedAt.getTime() + 86_400_000) } });
+    const day = await getDepartureHistory(dispatcherId, route, '2026-10-02');
+    assert.deepEqual(day.departures.map((entry) => entry.id), [tripId]);
+    assert.equal(day.departures[0]!.passengerCount, 7);
+    assert.equal(day.departures[0]!.departedAt, departedAt.toISOString());
+    assert.equal(day.departures[0]!.scheduledDepartureTime !== null, route === RouteCode.GOA);
+    assert.ok((await getDepartureHistory(dispatcherId, route, '2026-10-01')).departures.some((entry) => entry.id === 'history-before-midnight'));
+    assert.ok((await getDepartureHistory(dispatcherId, route, '2026-10-03')).departures.some((entry) => entry.id === 'history-next-midnight'));
+    const snapshot = async () => ({
+      trip: await prisma.trip.findUniqueOrThrow({ where: { id: tripId }, include: { reservations: { include: { payments: true, seats: true } }, assignments: true, passengerCounts: true } }),
+      queue: await prisma.queueEntry.findMany({ where: { route }, orderBy: { id: 'asc' } }),
+      logs: await prisma.dispatchLog.findMany({ where: { route }, orderBy: { id: 'asc' } }),
+      vehicle: await prisma.vehicle.findUniqueOrThrow({ where: { id: original.vehicleId } }),
+    });
+    const before = await snapshot();
+    await dismissDepartureHistory(dispatcherId, route, tripId);
+    await dismissDepartureHistory(dispatcherId, route, tripId); // Repeated deletion remains safe.
+    assert.deepEqual(await snapshot(), before);
+    assert.equal((await getDepartureHistory(dispatcherId, route, '2026-10-02')).departures.length, 0);
+    assert.equal(await prisma.dispatcherAlertRead.count({ where: { userId: dispatcherId, alertKey: `departure-history:${tripId}` } }), 1);
+    // History dismissal is per dispatcher; another account retains the entry.
+    const backup = await prisma.user.create({ data: { name: 'History backup', email: `history-${route}@uvgo.test`, passwordHash: 'unused', role: UserRole.DISPATCHER, dispatcherRoute: route } });
+    assert.equal((await getDepartureHistory(backup.id, route, '2026-10-02')).departures[0]?.id, tripId);
+  });
+}
+
+test('departure history endpoints enforce authentication, dispatcher route, valid dates and confirmed departures', async () => {
+  await prisma.trip.update({ where: { id: 'seed_trip_goa_morning' }, data: { departedAt: new Date('2026-10-02T04:00:00Z'), status: TripStatus.DEPARTED } });
+  const server = app.listen(0);
+  try {
+    await new Promise<void>((resolve) => server.once('listening', resolve));
+    const address = server.address();
+    assert.ok(address && typeof address === 'object');
+    const base = `http://127.0.0.1:${address.port}/api/dispatcher/departures/history`;
+    const session = async (email: string) => `${SESSION_COOKIE}=${(await authenticateUser(email, 'UVGoDemo123!')).token}`;
+    const goaCookie = await session('dispatcher@uvgo.demo');
+    const tayaCookie = await session('dispatcher.legazpi@uvgo.demo');
+    const passengerCookie = await session('passenger@uvgo.demo');
+    const get = (date: string, cookie?: string) => fetch(`${base}?date=${date}`, { headers: cookie ? { Cookie: cookie } : {} });
+    const remove = (id: string, cookie?: string) => fetch(`${base}/${id}`, { method: 'DELETE', headers: cookie ? { Cookie: cookie } : {} });
+    assert.equal((await get('2026-10-02')).status, 401);
+    assert.equal((await get('2026-10-02', passengerCookie)).status, 403);
+    for (const date of ['invalid', '2026-02-30', '2026-13-01']) assert.equal((await get(date, goaCookie)).status, 422);
+    const response = await get('2026-10-02', goaCookie);
+    assert.equal(response.status, 200);
+    assert.ok((await response.json() as { departures: Array<{ id: string }> }).departures.some((entry) => entry.id === 'seed_trip_goa_morning'));
+    assert.equal((await get('2026-10-02', tayaCookie)).status, 200);
+    assert.equal((await remove('seed_trip_goa_morning')).status, 401);
+    assert.equal((await remove('seed_trip_goa_morning', passengerCookie)).status, 403);
+    assert.equal((await remove('seed_trip_goa_morning', tayaCookie)).status, 403);
+    assert.equal((await remove('seed_trip_goa_day_two', goaCookie)).status, 409);
+    assert.equal((await remove('missing-trip', goaCookie)).status, 404);
+    assert.equal((await remove('seed_trip_goa_morning', goaCookie)).status, 204);
+    const reloaded = await get('2026-10-02', goaCookie);
+    assert.equal(reloaded.status, 200);
+    assert.equal((await reloaded.json() as { departures: Array<{ id: string }> }).departures.some((entry) => entry.id === 'seed_trip_goa_morning'), false);
+    assert.equal((await prisma.trip.findUniqueOrThrow({ where: { id: 'seed_trip_goa_morning' } })).status, TripStatus.DEPARTED);
+  } finally { await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())); }
+});
+
+for (const daysAgo of [1, 3]) {
+  test(`Goso admits today's accepted schedule when ON_TRIP belongs to a departure ${daysAgo} day(s) earlier`, async () => {
+    const day = manilaServiceDay(new Date());
+    const now = new Date(day.start.getTime() + 8 * 60 * 60_000);
+    const previousDeparture = new Date(day.start.getTime() - (daysAgo - 1) * 86_400_000 - 60 * 60_000);
+    await prisma.trip.update({ where: { id: 'seed_trip_goa_morning' }, data: { status: TripStatus.DEPARTED, departedAt: previousDeparture, boardingStartTime: new Date(previousDeparture.getTime() - 20 * 60_000), scheduledOrTriggeredTime: new Date(previousDeparture.getTime() - 10 * 60_000) } });
+    await prisma.queueEntry.update({ where: { id: 'seed_queue_goa_1' }, data: { status: QueueStatus.DEPARTED } });
+    await prisma.vehicle.update({ where: { id: 'seed_vehicle_033' }, data: { status: VehicleStatus.ON_TRIP, insideTerminalZone: false } });
+    const trip = await prisma.trip.create({ data: { vehicleId: 'seed_vehicle_033', route: RouteCode.GOA, status: TripStatus.ASSIGNED, fareAmount: DEFAULT_GOA_FARE, boardingStartTime: new Date(day.start.getTime() + 10 * 60 * 60_000), scheduledOrTriggeredTime: new Date(day.start.getTime() + (10 * 60 + 10) * 60_000), createdByDispatcherId: 'seed_user_dispatcher' } });
+    const assignment = await prisma.tripAssignment.create({ data: { tripId: trip.id, driverId: 'seed_user_driver_rodel', status: AssignmentStatus.ACCEPTED, assignedAt: now, respondedAt: now, responseDeadline: trip.boardingStartTime! } });
+    const previousTrip = await prisma.trip.findUniqueOrThrow({ where: { id: 'seed_trip_goa_morning' }, include: { reservations: { include: { seats: true, payments: true } }, passengerCounts: true } });
+    assert.equal((await admitAcceptedGosoSchedulesForDay(now)).admitted, 1);
+    const admitted = await prisma.tripAssignment.findUniqueOrThrow({ where: { id: assignment.id }, include: { queueEntry: true } });
+    assert.equal(admitted.status, AssignmentStatus.ACCEPTED);
+    assert.equal(admitted.queueEntry?.status, QueueStatus.ACCEPTED);
+    assert.equal(admitted.queueEntry?.scheduledLoadingTime?.getTime(), trip.boardingStartTime?.getTime());
+    assert.equal((await prisma.vehicle.findUniqueOrThrow({ where: { id: trip.vehicleId } })).status, VehicleStatus.OUTSIDE_ZONE);
+    assert.deepEqual(await prisma.trip.findUniqueOrThrow({ where: { id: previousTrip.id }, include: { reservations: { include: { seats: true, payments: true } }, passengerCounts: true } }), previousTrip);
+    assert.equal((await admitAcceptedGosoSchedulesForDay(now)).admitted, 0);
+    assert.equal((await prisma.tripAssignment.findUniqueOrThrow({ where: { id: assignment.id } })).queueEntryId, admitted.queueEntryId);
+    const queue = await getDispatcherQueue(RouteCode.GOA);
+    assert.ok(queue.entries.some((entry) => entry.tripId === trip.id && entry.driver === 'Rodel Reyes'));
+  });
+}
+
+for (const scenario of ['no recorded departure', 'loading before latest departure', 'future-day schedule'] as const) {
+  test(`Goso preserves ON_TRIP exclusion with ${scenario}`, async () => {
+    const day = manilaServiceDay(new Date());
+    const now = new Date(day.start.getTime() + 8 * 60 * 60_000);
+    const boarding = new Date(day.start.getTime() + (scenario === 'future-day schedule' ? 34 : 10) * 60 * 60_000);
+    await prisma.trip.update({ where: { id: 'seed_trip_goa_morning' }, data: { status: TripStatus.DEPARTED, departedAt: scenario === 'no recorded departure' ? null : scenario === 'loading before latest departure' ? new Date(boarding.getTime() + 60_000) : new Date(day.start.getTime() - 60_000) } });
+    await prisma.queueEntry.update({ where: { id: 'seed_queue_goa_1' }, data: { status: QueueStatus.DEPARTED } });
+    await prisma.vehicle.update({ where: { id: 'seed_vehicle_033' }, data: { status: VehicleStatus.ON_TRIP } });
+    const trip = await prisma.trip.create({ data: { vehicleId: 'seed_vehicle_033', route: RouteCode.GOA, status: TripStatus.ASSIGNED, fareAmount: DEFAULT_GOA_FARE, boardingStartTime: boarding, scheduledOrTriggeredTime: new Date(boarding.getTime() + 10 * 60_000) } });
+    const assignment = await prisma.tripAssignment.create({ data: { tripId: trip.id, driverId: 'seed_user_driver_rodel', status: AssignmentStatus.ACCEPTED, responseDeadline: boarding } });
+    await admitAcceptedGosoSchedulesForDay(now);
+    assert.equal((await prisma.vehicle.findUniqueOrThrow({ where: { id: trip.vehicleId } })).status, VehicleStatus.ON_TRIP);
+    assert.equal((await prisma.tripAssignment.findUniqueOrThrow({ where: { id: assignment.id } })).queueEntryId, null);
+  });
+}
+
+for (const explicitLoading of [true, false]) {
+  for (const offsetMs of [-1, 0, 1]) {
+    test(`Reservation cutoff: ${explicitLoading ? 'explicit' : 'fallback'} loading, ${offsetMs} ms from cutoff`, async (context) => {
+      // Early morning loading closes reservations on the previous Manila day.
+      const loading = new Date('2099-02-03T02:00:00+08:00');
+      const departure = new Date(loading.getTime() + (explicitLoading ? 90 : 10) * 60_000);
+      const cutoff = new Date('2099-02-02T21:00:00+08:00');
+      const trip = await prisma.trip.update({
+        where: { id: 'seed_trip_goa_day_three' },
+        data: { boardingStartTime: explicitLoading ? loading : null, scheduledOrTriggeredTime: departure, status: TripStatus.SCHEDULED },
+      });
+      assert.equal(reservationCutoffFor(departure, trip.boardingStartTime).getTime(), cutoff.getTime());
+      context.mock.timers.enable({ apis: ['Date'], now: cutoff.getTime() + offsetMs });
+
+      const undated = await searchGoaTrips(undefined, 1);
+      const dated = await searchGoaTrips('2099-02-03', 1);
+      const input = { passengerId: 'seed_user_passenger_ana', tripId: trip.id, seats: [1], contact: '09170000001', receiptImageKey: 'cutoff-test.png', receiptMimeType: 'image/png' };
+      if (offsetMs < 0) {
+        for (const results of [undated, dated]) {
+          const result = results.find((candidate) => candidate.id === trip.id);
+          assert.ok(result);
+          assert.equal(result.reservationCutoffTime, cutoff.toISOString());
+        }
+        assert.equal((await getTripSeats(trip.id)).trip.reservationCutoffTime, cutoff.toISOString());
+        assert.equal((await quoteReservationFare(input)).totalAmount, Number(trip.fareAmount));
+        const booking = await createGcashReservation(input);
+        assert.equal(booking.status, 'pending_verification');
+        assert.deepEqual(booking.seats, [1]);
+      } else {
+        for (const results of [undated, dated]) assert.equal(results.some((candidate) => candidate.id === trip.id), false);
+        const before = {
+          reservations: await prisma.reservation.count(), payments: await prisma.payment.count(),
+          seats: await prisma.reservationSeat.count(), notifications: await prisma.notification.count(),
+          passenger: await prisma.user.findUniqueOrThrow({ where: { id: input.passengerId } }),
+        };
+        const cutoffError = (error: unknown) => error instanceof AppError && error.statusCode === 409
+          && error.code === 'TRIP_CLOSED' && error.message.includes('5 hours before loading');
+        for (const request of [
+          () => getTripSeats(trip.id),
+          () => quoteReservationFare(input),
+          () => createGcashReservation(input),
+          () => createPaypalReservation(input),
+          () => createPaypalHostedReservation(input),
+        ]) await assert.rejects(request, cutoffError);
+        assert.deepEqual({
+          reservations: await prisma.reservation.count(), payments: await prisma.payment.count(),
+          seats: await prisma.reservationSeat.count(), notifications: await prisma.notification.count(),
+          passenger: await prisma.user.findUniqueOrThrow({ where: { id: input.passengerId } }),
+        }, before);
+      }
+    });
+  }
+}
+
+test('Reservation cutoff: loading edits update the cutoff and stale rescheduling preserves the existing booking', async (context) => {
+  const now = new Date('2099-02-02T12:00:00+08:00');
+  context.mock.timers.enable({ apis: ['Date'], now: now.getTime() });
+  await prisma.trip.update({ where: { id: 'seed_trip_goa_morning' }, data: { boardingStartTime: new Date('2099-02-05T09:50:00+08:00'), scheduledOrTriggeredTime: new Date('2099-02-05T10:00:00+08:00') } });
+  const id = 'seed_trip_goa_day_three';
+  const departure = new Date('2099-02-02T20:00:00+08:00');
+  await prisma.trip.update({ where: { id }, data: { scheduledOrTriggeredTime: departure, boardingStartTime: new Date('2099-02-02T19:00:00+08:00') } });
+  assert.ok((await searchGoaTrips(undefined, 1)).some((trip) => trip.id === id));
+  // Moving loading earlier closes bookings even though departure remains eight hours away.
+  await prisma.trip.update({ where: { id }, data: { boardingStartTime: new Date('2099-02-02T16:00:00+08:00') } });
+  assert.equal((await searchGoaTrips(undefined, 1)).some((trip) => trip.id === id), false);
+  const where = { reference: 'UVGO-DEMO-001' };
+  const include = { seats: true, payments: true };
+  const existing = await prisma.reservation.findUniqueOrThrow({ where, include });
+  await assert.rejects(() => reschedulePassengerBooking('seed_user_passenger_ana', existing.reference, id, [5]),
+    (error: unknown) => error instanceof AppError && error.code === 'TRIP_CLOSED');
+  assert.deepEqual(await prisma.reservation.findUniqueOrThrow({ where, include }), existing);
+  assert.equal((await getPassengerBooking('seed_user_passenger_ana', existing.reference)).status, 'confirmed');
+  await decideGcashPayment('seed_user_dispatcher', RouteCode.GOA, 'seed_payment_gcash', 'approve', '');
+  assert.equal((await prisma.payment.findUniqueOrThrow({ where: { id: 'seed_payment_gcash' } })).status, PaymentStatus.VERIFIED);
+  await prisma.trip.update({ where: { id }, data: { boardingStartTime: new Date('2099-02-02T19:00:00+08:00') } });
+  assert.ok((await searchGoaTrips(undefined, 1)).some((trip) => trip.id === id));
+});
+
+for (const explicitLoading of [true, false]) {
+  for (const offsetMs of [-1, 0, 1]) {
+    test(`Reschedule policy: ${explicitLoading ? 'explicit' : 'fallback'} 10 AM loading closes at 5 AM, offset ${offsetMs} ms`, async (context) => {
+      const loading = new Date('2099-02-03T10:00:00+08:00');
+      const cutoff = new Date('2099-02-03T05:00:00+08:00');
+      const departure = new Date(loading.getTime() + (explicitLoading ? 120 : 10) * 60_000);
+      await prisma.trip.update({ where: { id: 'seed_trip_goa_morning' }, data: {
+        boardingStartTime: explicitLoading ? loading : null, scheduledOrTriggeredTime: departure,
+      } });
+      await prisma.trip.update({ where: { id: 'seed_trip_goa_day_two' }, data: {
+        boardingStartTime: new Date('2099-02-04T10:00:00+08:00'), scheduledOrTriggeredTime: new Date('2099-02-04T10:10:00+08:00'),
+      } });
+      context.mock.timers.enable({ apis: ['Date'], now: cutoff.getTime() + offsetMs });
+      const existing = await prisma.reservation.findUniqueOrThrow({ where: { reference: 'UVGO-DEMO-001' }, include: { seats: true, payments: true } });
+      const before = await getPassengerBooking(existing.passengerId, existing.reference);
+      assert.equal(before.rescheduleCutoffTime, cutoff.toISOString());
+      assert.equal(before.canReschedule, offsetMs < 0);
+      assert.equal(before.rescheduleCount, 0);
+      assert.equal(before.reschedulesRemaining, 3);
+      if (offsetMs < 0) {
+        // This is inside the former 24-hour window and must now succeed.
+        const moved = await reschedulePassengerBooking(existing.passengerId, existing.reference, 'seed_trip_goa_day_two', [5]);
+        assert.equal(moved.rescheduleCount, 1);
+        assert.equal(moved.reschedulesRemaining, 2);
+        assert.equal(moved.rescheduleCutoffTime, '2099-02-03T21:00:00.000Z');
+        assert.equal(moved.totalAmount, before.totalAmount);
+        assert.deepEqual(moved.seats, [5]);
+        assert.deepEqual((await prisma.reservation.findUniqueOrThrow({ where: { id: existing.id }, include: { payments: true } })).payments, existing.payments);
+      } else {
+        await assert.rejects(() => reschedulePassengerBooking(existing.passengerId, existing.reference, 'seed_trip_goa_day_two', [5]),
+          (error: unknown) => error instanceof AppError && error.code === 'RESCHEDULE_WINDOW_CLOSED');
+        assert.deepEqual(await prisma.reservation.findUniqueOrThrow({ where: { id: existing.id }, include: { seats: true, payments: true } }), existing);
+      }
+    });
+  }
+}
+
+test('Reschedule policy: three successful changes persist, a fourth is blocked, and notification deletion does not reset attempts', async () => {
+  const passengerId = 'seed_user_passenger_ana';
+  const reference = 'UVGO-DEMO-001';
+  const initial = await getPassengerBooking(passengerId, reference);
+  for (const [index, tripId] of ['seed_trip_goa_day_two', 'seed_trip_goa_day_three', 'seed_trip_goa_day_two'].entries()) {
+    const moved = await reschedulePassengerBooking(passengerId, reference, tripId, [5]);
+    assert.equal(moved.rescheduleCount, index + 1);
+    assert.equal(moved.rescheduleLimit, 3);
+    assert.equal(moved.reschedulesRemaining, 2 - index);
+    assert.equal(moved.canReschedule, index < 2);
+    assert.equal(moved.totalAmount, initial.totalAmount);
+    assert.equal(moved.reference, initial.reference);
+  }
+  await prisma.notification.deleteMany({ where: { userId: passengerId, message: `Booking ${reference} was rescheduled.` } });
+  const before = await prisma.reservation.findUniqueOrThrow({ where: { reference }, include: { seats: true, payments: true } });
+  await assert.rejects(() => reschedulePassengerBooking(passengerId, reference, 'seed_trip_goa_day_three', [6]),
+    (error: unknown) => error instanceof AppError && error.code === 'RESCHEDULE_LIMIT_REACHED');
+  assert.deepEqual(await prisma.reservation.findUniqueOrThrow({ where: { reference }, include: { seats: true, payments: true } }), before);
+  const reloaded = await getPassengerBooking(passengerId, reference);
+  assert.equal(reloaded.rescheduleCount, 3);
+  assert.equal(reloaded.canReschedule, false);
+  assert.match(reloaded.rescheduleMessage, /limit of 3/);
+});
+
+test('Reschedule policy: concurrent requests cannot consume more than the final remaining attempt', async () => {
+  const passengerId = 'seed_user_passenger_ana';
+  const reference = 'UVGO-DEMO-001';
+  await prisma.reservation.update({ where: { reference }, data: { rescheduleCount: 2 } });
+  const outcomes = await Promise.allSettled([
+    reschedulePassengerBooking(passengerId, reference, 'seed_trip_goa_day_two', [5]),
+    reschedulePassengerBooking(passengerId, reference, 'seed_trip_goa_day_three', [6]),
+  ]);
+  assert.equal(outcomes.filter((outcome) => outcome.status === 'fulfilled').length, 1);
+  const failed = outcomes.find((outcome) => outcome.status === 'rejected');
+  assert.ok(failed?.status === 'rejected' && failed.reason instanceof AppError && failed.reason.code === 'RESCHEDULE_LIMIT_REACHED');
+  assert.equal((await getPassengerBooking(passengerId, reference)).rescheduleCount, 3);
+  assert.equal(await prisma.reservationSeat.count({ where: { reservation: { reference } } }), 1);
+  assert.equal(await prisma.notification.count({ where: { userId: passengerId, message: `Booking ${reference} was rescheduled.` } }), 1);
+});
+
+test('Reschedule policy: failures, duplicate submissions, and automatic reallocations do not consume attempts', async () => {
+  const passengerId = 'seed_user_passenger_ana';
+  const reference = 'UVGO-DEMO-001';
+  const initial = await getPassengerBooking(passengerId, reference);
+  await assert.rejects(() => reschedulePassengerBooking(passengerId, reference, 'seed_trip_goa_day_two', []),
+    (error: unknown) => error instanceof AppError && error.code === 'SEAT_COUNT_MISMATCH');
+  await assert.rejects(() => reschedulePassengerBooking(passengerId, reference, initial.tripId, initial.seats),
+    (error: unknown) => error instanceof AppError && error.code === 'RESCHEDULE_UNCHANGED');
+  await assert.rejects(() => reschedulePassengerBooking('seed_user_passenger_maria', reference, 'seed_trip_goa_day_two', [5]),
+    (error: unknown) => error instanceof AppError && error.code === 'BOOKING_NOT_FOUND');
+  assert.equal((await getPassengerBooking(passengerId, reference)).rescheduleCount, 0);
+  await reschedulePassengerBooking(passengerId, reference, 'seed_trip_goa_day_two', [5]);
+  await assert.rejects(() => reschedulePassengerBooking(passengerId, reference, 'seed_trip_goa_day_two', [5]),
+    (error: unknown) => error instanceof AppError && error.code === 'RESCHEDULE_UNCHANGED');
+  assert.equal((await getPassengerBooking(passengerId, reference)).rescheduleCount, 1);
+  const payments = await prisma.payment.findMany({ where: { reservation: { reference } } });
+  // Reallocation selects the van's earliest active departure. The passenger
+  // has moved to day two, so retire the earlier fixture departure first.
+  await prisma.trip.update({ where: { id: 'seed_trip_goa_morning' }, data: { status: TripStatus.COMPLETED } });
+  await reallocateUnavailableVehicle('seed_user_dispatcher', 'seed_vehicle_033', 'Reschedule policy regression');
+  const reallocated = await getPassengerBooking(passengerId, reference);
+  assert.equal(reallocated.status, 'reallocated');
+  assert.equal(reallocated.rescheduleCount, 1);
+  assert.equal(reallocated.reschedulesRemaining, 2);
+  assert.deepEqual(await prisma.payment.findMany({ where: { reservation: { reference } } }), payments);
 });

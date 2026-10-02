@@ -17,7 +17,7 @@
 11. PayPal demo capture confirmation.
 12. GCash receipt pending-verification state.
 13. Dispatcher GCash approval and booking confirmation.
-14. Reschedule rejection inside 24 hours.
+14. Reschedule rejection at five hours before loading and after three successful changes, including concurrent submissions.
 15. Confirmed and pending reservation reallocation to an eligible vehicle.
 16. Accepted driver cancellation, FIFO replacement assignment, optional reason logging, and automatic seat-conflict resolution.
 17. Server-side role authorization.

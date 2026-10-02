@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
+  BusFront,
   CalendarClock,
   CalendarDays,
   ChevronDown,
@@ -628,16 +629,20 @@ function DispatcherTayaSchedulesPage() {
   if (!data) return <EmptyState icon={<CalendarDays className="h-6 w-6" />} title="Taya schedules unavailable" description={error ?? 'No weekly schedule data was returned.'} action={<Button variant="outline" onClick={() => void load()}>Try again</Button>} />;
   const selectedWeekday = WEEKDAYS.find((day) => day.value === selectedWeeklyDay) ?? WEEKDAYS[0];
   return (
-    <div className="space-y-4">
-      <div><p className="text-xs font-bold uppercase tracking-[0.12em] text-primary">Taya weekly operations</p><h2 className="mt-1 text-2xl font-black">Legazpi queue schedules</h2></div>
+    <div className="grid min-w-0 gap-4">
+      <div className="hidden lg:block"><p className="text-[0.65rem] font-bold uppercase tracking-[0.12em] text-primary sm:text-xs">Taya weekly operations</p><h2 className="mt-1 text-lg font-black sm:text-2xl">Legazpi queue schedules</h2></div>
       {error ? <p role="alert" className="rounded-control bg-danger-soft p-3 text-sm text-danger">{error}</p> : null}
       <Card className="p-4 sm:p-5">
-        <div className="flex flex-wrap items-center gap-2 border-b border-border pb-4">
-          <h3 className="text-lg font-extrabold">Weekly queue order</h3>
-          <StatusBadge tone="success">Repeats automatically</StatusBadge>
+        <div className="border-b border-border pb-3 sm:pb-4">
+          <div className="flex flex-wrap items-center gap-2"><h3 className="text-base font-extrabold sm:text-lg">Weekly queue order</h3><StatusBadge tone="success">Repeats automatically</StatusBadge></div>
+          <details className="group mt-2 sm:hidden">
+            <summary className="flex min-h-touch cursor-pointer list-none items-center justify-between gap-2 text-xs font-semibold text-text-secondary [&::-webkit-details-marker]:hidden">How to arrange the weekly queue<ChevronDown className="h-4 w-4 shrink-0 transition-transform group-open:rotate-180" aria-hidden="true" /></summary>
+            <p className="pb-2 text-xs leading-5 text-text-secondary">Add drivers, use Up and Down to set their positions, then save the selected weekday. The saved order repeats every week.</p>
+          </details>
+          <p className="mt-1 hidden text-sm leading-6 text-text-secondary sm:block">Add drivers and arrange their positions, then save the selected weekday.</p>
         </div>
-        <div className="-mx-1 mt-4 overflow-x-auto px-1 pb-2" role="tablist" aria-label="Taya weekly schedule days">
-          <div className="flex min-w-max gap-2">
+        <div className="-mx-1 mt-3 px-1 pb-2 sm:mt-4 sm:overflow-x-auto" role="tablist" aria-label="Taya weekly schedule days">
+          <div className="grid grid-cols-7 gap-1 sm:flex sm:min-w-max sm:gap-2">
             {WEEKDAYS.map((day) => {
               const selected = day.value === selectedWeeklyDay;
               const count = data.entries.filter((entry) => entry.weekday === day.value).length;
@@ -649,33 +654,44 @@ function DispatcherTayaSchedulesPage() {
                   role="tab"
                   aria-selected={selected}
                   aria-controls="taya-weekly-day-panel"
+                  aria-label={`${day.label}, ${count} driver${count === 1 ? '' : 's'}`}
                   onClick={() => selectWeekday(day.value)}
-                  className={`min-h-touch min-w-[4.5rem] shrink-0 rounded-control border px-3 py-2 text-left transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary ${selected ? 'border-primary bg-primary text-text-inverse shadow-sm' : 'border-border bg-surface text-text-primary hover:border-primary/40 hover:bg-primary-soft'}`}
+                  className={`min-h-touch min-w-0 rounded-control border px-0.5 py-2 text-center transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary sm:min-w-[4.5rem] sm:shrink-0 sm:px-3 sm:text-left ${selected ? 'border-primary bg-primary text-text-inverse shadow-sm' : 'border-border bg-surface text-text-primary hover:border-primary/40 hover:bg-primary-soft'}`}
                 >
-                  <span className="block text-sm font-extrabold">{day.label.slice(0, 3)}</span>
-                  <span className={`mt-0.5 block text-[0.7rem] font-semibold ${selected ? 'text-text-inverse/80' : 'text-text-muted'}`}>{count} rule{count === 1 ? '' : 's'}</span>
+                  <span className="block text-[0.65rem] font-extrabold sm:text-sm">{day.label.slice(0, 3)}</span>
+                  <span className={`mt-0.5 block text-[0.7rem] font-semibold ${selected ? 'text-text-inverse/80' : 'text-text-muted'}`}>{count}<span className="hidden sm:inline"> rule{count === 1 ? '' : 's'}</span></span>
                 </button>
               );
             })}
           </div>
         </div>
-        <section id="taya-weekly-day-panel" role="tabpanel" aria-labelledby={`taya-weekly-day-tab-${selectedWeekday.value}`} className="mt-2 rounded-control border border-border bg-background/45 p-3 sm:p-4">
+        <section id="taya-weekly-day-panel" role="tabpanel" aria-labelledby={`taya-weekly-day-tab-${selectedWeekday.value}`} className="mt-2 min-w-0 sm:rounded-control sm:border sm:border-border sm:bg-background/45 sm:p-4">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <div><p className="text-xs font-bold uppercase tracking-[0.12em] text-primary">Selected day</p><h4 className="mt-0.5 text-lg font-extrabold text-text-primary">{selectedWeekday.label}</h4></div>
+            <div><p className="hidden text-xs font-bold uppercase tracking-[0.12em] text-primary sm:block">Selected day</p><h4 className="text-base font-extrabold text-text-primary sm:mt-0.5 sm:text-lg">{selectedWeekday.label}</h4></div>
             <StatusBadge tone="info">{`${vehicleIds.length} driver${vehicleIds.length === 1 ? '' : 's'}`}</StatusBadge>
           </div>
-          <div className="dashboard-inline-form mt-4 flex flex-col gap-2 sm:flex-row sm:items-end">
-            <Select className="flex-1" label="Add van and driver" value={selectedVehicleId} onChange={(event) => setSelectedVehicleId(event.target.value)}>
+          <div className="mt-3 grid grid-cols-[minmax(0,1fr)_auto] items-end gap-2 sm:mt-4 [&>div]:min-w-0">
+            <Select className="min-w-0" label="Add van and driver" value={selectedVehicleId} onChange={(event) => setSelectedVehicleId(event.target.value)}>
               <option value="">Choose a van and driver</option>
               {availableVehicles.map((vehicle) => <option key={vehicle.id} value={vehicle.id}>{vehicle.vanId} · {vehicle.driver}</option>)}
             </Select>
-            <Button disabled={!selectedVehicleId} onClick={() => { setVehicleIds((current) => [...current, selectedVehicleId]); setSelectedVehicleId(''); }} leadingIcon={<Plus className="h-4 w-4" />}>Add to queue</Button>
+            <Button className="gap-1 px-3 sm:gap-2 sm:px-5" aria-label="Add to queue" disabled={!selectedVehicleId} onClick={() => { setVehicleIds((current) => [...current, selectedVehicleId]); setSelectedVehicleId(''); }} leadingIcon={<Plus className="h-4 w-4" />}><span className="sm:hidden">Add</span><span className="hidden sm:inline">Add to queue</span></Button>
           </div>
-          {vehicleIds.length ? <div className="mt-4 space-y-2">{vehicleIds.map((vehicleId, index) => {
+          {vehicleIds.length ? <div className="mt-3 space-y-3 sm:mt-4 sm:space-y-2">{vehicleIds.map((vehicleId, index) => {
             const vehicle = data.vehicles.find((candidate) => candidate.id === vehicleId);
-            return <div key={vehicleId} className="grid grid-cols-[2.25rem_minmax(0,1fr)] gap-3 rounded-control border border-border bg-surface p-3 sm:flex sm:items-center"><span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-primary text-sm font-black text-white">{index + 1}</span><div className="min-w-0 flex-1"><p className="truncate font-extrabold">{vehicle?.vanId ?? 'Van'} · {vehicle?.driver ?? 'Driver'}</p><p className="text-xs text-text-secondary">{vehicle?.capacity ?? 0} passenger seats</p></div><div className="col-span-2 flex justify-end gap-2 sm:shrink-0 sm:gap-1"><Button className="w-11 shrink-0 px-0" size="sm" variant="ghost" disabled={index === 0} aria-label="Move up" onClick={() => move(index, -1)}><ChevronUp className="h-4 w-4" /></Button><Button className="w-11 shrink-0 px-0" size="sm" variant="ghost" disabled={index === vehicleIds.length - 1} aria-label="Move down" onClick={() => move(index, 1)}><ChevronDown className="h-4 w-4" /></Button><Button className="w-11 shrink-0 px-0" size="sm" variant="danger" aria-label={`Remove ${vehicle?.driver ?? 'driver'}`} onClick={() => setVehicleIds((current) => current.filter((id) => id !== vehicleId))}><X className="h-4 w-4" /></Button></div></div>;
+            return <article key={vehicleId} className="min-w-0 rounded-control border border-border bg-surface p-3 shadow-sm sm:flex sm:items-center sm:gap-3 sm:shadow-none">
+              <div className="flex min-w-0 items-start gap-2.5 sm:flex-1 sm:items-center">
+                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary text-sm font-black text-white sm:h-9 sm:w-9 sm:rounded-full" aria-label={`Queue position ${index + 1}`}>{index + 1}</span>
+                <div className="min-w-0 flex-1"><p className="break-words text-sm font-extrabold leading-5 sm:text-base">{vehicle?.driver ?? 'Driver'}</p><p className="mt-0.5 break-all text-[0.7rem] text-text-secondary sm:text-xs">{vehicle?.vanId ?? 'Van'}</p><p className="mt-1 text-xs text-text-secondary">{vehicle?.capacity ?? 0} passenger seats</p></div>
+              </div>
+              <div className="mt-3 grid grid-cols-3 gap-1.5 border-t border-border pt-3 sm:mt-0 sm:flex sm:shrink-0 sm:gap-1 sm:border-0 sm:pt-0">
+                <Button className="gap-1 px-1.5 text-xs sm:w-11 sm:shrink-0 sm:gap-0 sm:px-0" size="sm" variant="ghost" disabled={index === 0} aria-label="Move up" onClick={() => move(index, -1)} leadingIcon={<ChevronUp className="h-4 w-4" aria-hidden="true" />}><span className="sm:hidden">Up</span></Button>
+                <Button className="gap-1 px-1.5 text-xs sm:w-11 sm:shrink-0 sm:gap-0 sm:px-0" size="sm" variant="ghost" disabled={index === vehicleIds.length - 1} aria-label="Move down" onClick={() => move(index, 1)} leadingIcon={<ChevronDown className="h-4 w-4" aria-hidden="true" />}><span className="sm:hidden">Down</span></Button>
+                <Button className="gap-1 px-1.5 text-xs sm:w-11 sm:shrink-0 sm:gap-0 sm:px-0" size="sm" variant="danger" aria-label={`Remove ${vehicle?.driver ?? 'driver'}`} onClick={() => setVehicleIds((current) => current.filter((id) => id !== vehicleId))} leadingIcon={<X className="hidden h-4 w-4 sm:block" aria-hidden="true" />}><span className="sm:hidden">Remove</span></Button>
+              </div>
+            </article>;
           })}</div> : <p className="mt-4 rounded-control border border-dashed border-border bg-surface px-3 py-8 text-center text-sm text-text-muted">No drivers are scheduled for {selectedWeekday.label}.</p>}
-          <Button className="mt-4" fullWidth loading={saving} onClick={() => void save()}>Save {selectedWeekday.label} queue order</Button>
+          <Button className="mt-4" fullWidth loading={saving} onClick={() => void save()} leadingIcon={<ShieldCheck className="h-4 w-4" />}>Save {selectedWeekday.label} queue order</Button>
         </section>
       </Card>
     </div>
@@ -900,28 +916,32 @@ function DispatcherGosoSchedulesPage() {
   const assignmentResponseSchedules = data.schedules.filter((schedule) => schedule.assignment);
 
   return (
-    <div className="space-y-4">
-      <div className="dashboard-page-toolbar flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div><p className="text-xs font-bold uppercase tracking-[0.12em] text-primary">Goso fixed-time operations</p><h2 className="mt-1 text-2xl font-black">Goa departure schedules</h2></div>
-        <Button onClick={() => openWeeklyCreate()} disabled={!data.vehicles.length} leadingIcon={<CalendarDays className="h-4 w-4" />}>Set weekly schedule</Button>
+    <div className="min-w-0 space-y-4">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="hidden min-w-0 lg:block"><p className="text-[0.65rem] font-bold uppercase tracking-[0.12em] text-primary sm:text-xs">Goso fixed-time operations</p><h2 className="mt-1 text-lg font-black sm:text-2xl">Goa departure schedules</h2></div>
+        <Button className="w-full sm:w-auto" onClick={() => openWeeklyCreate()} disabled={!data.vehicles.length} leadingIcon={<CalendarDays className="h-4 w-4" />}>Set weekly schedule</Button>
       </div>
       {error ? <p role="alert" className="rounded-control bg-danger-soft p-3 text-sm text-danger">{error}</p> : null}
       {!data.vehicles.length ? <Card className="border-warning/30 bg-warning-soft p-4 text-sm">Create an active Goa driver and van before adding a departure.</Card> : null}
       <Card className="p-4 sm:p-5">
-        <div className="dashboard-page-toolbar flex flex-col gap-2 border-b border-border pb-4 sm:flex-row sm:items-start sm:justify-between">
-          <div>
+        <div className="flex flex-col gap-2 border-b border-border pb-3 sm:flex-row sm:items-start sm:justify-between sm:pb-4">
+          <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
-              <h3 className="text-lg font-extrabold">Fixed weekly timetable</h3>
+              <h3 className="text-base font-extrabold sm:text-lg">Fixed weekly timetable</h3>
               <StatusBadge tone="success">Repeats automatically</StatusBadge>
             </div>
-            <p className="mt-1 max-w-3xl text-sm leading-6 text-text-secondary">
+            <details className="group mt-2 sm:hidden">
+              <summary className="flex min-h-touch cursor-pointer list-none items-center justify-between gap-2 text-xs font-semibold text-text-secondary [&::-webkit-details-marker]:hidden">How weekly schedules work<ChevronDown className="h-4 w-4 shrink-0 transition-transform group-open:rotate-180" aria-hidden="true" /></summary>
+              <p className="pb-2 text-xs leading-5 text-text-secondary">Configure Monday–Sunday once. UVGo keeps eight weeks of bookable departures ready and extends them every week until a rule is edited, paused, or removed.</p>
+            </details>
+            <p className="mt-1 hidden max-w-3xl text-sm leading-6 text-text-secondary sm:block">
               Configure Monday–Sunday once. UVGo keeps eight weeks of bookable departures ready and extends them every week until a rule is edited, paused, or removed.
             </p>
           </div>
-          <Button size="sm" onClick={() => openWeeklyCreate()} disabled={!data.vehicles.length} leadingIcon={<Plus className="h-4 w-4" />}>Add weekly rule</Button>
+          <Button className="hidden sm:inline-flex" size="sm" onClick={() => openWeeklyCreate()} disabled={!data.vehicles.length} leadingIcon={<Plus className="h-4 w-4" />}>Add weekly rule</Button>
         </div>
-        <div className="-mx-1 mt-4 overflow-x-auto px-1 pb-2" role="tablist" aria-label="Weekly schedule days">
-          <div className="flex min-w-max gap-2">
+        <div className="-mx-1 mt-3 px-1 pb-2 sm:mt-4 sm:overflow-x-auto" role="tablist" aria-label="Weekly schedule days">
+          <div className="grid grid-cols-7 gap-1 sm:flex sm:min-w-max sm:gap-2">
             {WEEKDAYS.map((day) => {
               const selected = day.value === selectedWeekday.value;
               const count = data.weeklySchedules.filter((template) => template.weekday === day.value).length;
@@ -931,14 +951,15 @@ function DispatcherGosoSchedulesPage() {
                   id={`weekly-day-tab-${day.value}`}
                   type="button"
                   role="tab"
+                  aria-label={`${day.label}, ${count} rule${count === 1 ? '' : 's'}`}
                   aria-selected={selected}
                   aria-controls="weekly-day-panel"
                   onClick={() => setSelectedWeeklyDay(day.value)}
-                  className={`min-h-touch min-w-[4.5rem] shrink-0 rounded-control border px-3 py-2 text-left transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary ${selected ? 'border-primary bg-primary text-text-inverse shadow-sm' : 'border-border bg-surface text-text-primary hover:border-primary/40 hover:bg-primary-soft'}`}
+                  className={`min-h-touch min-w-0 rounded-control border px-0.5 py-2 text-center transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary sm:min-w-[4.5rem] sm:shrink-0 sm:px-3 sm:text-left ${selected ? 'border-primary bg-primary text-text-inverse shadow-sm' : 'border-border bg-surface text-text-primary hover:border-primary/40 hover:bg-primary-soft'}`}
                 >
-                  <span className="block text-sm font-extrabold">{day.label.slice(0, 3)}</span>
+                  <span className="block text-[0.65rem] font-extrabold sm:text-sm">{day.label.slice(0, 3)}</span>
                   <span className={`mt-0.5 block text-[0.7rem] font-semibold ${selected ? 'text-text-inverse/80' : 'text-text-muted'}`}>
-                    {count} rule{count === 1 ? '' : 's'}
+                    {count}<span className="hidden sm:inline"> rule{count === 1 ? '' : 's'}</span>
                   </span>
                 </button>
               );
@@ -949,34 +970,45 @@ function DispatcherGosoSchedulesPage() {
           id="weekly-day-panel"
           role="tabpanel"
           aria-labelledby={`weekly-day-tab-${selectedWeekday.value}`}
-          className="mt-2 rounded-control border border-border bg-background/45 p-3 sm:p-4"
+          className="mt-2 min-w-0 sm:rounded-control sm:border sm:border-border sm:bg-background/45 sm:p-4"
         >
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
-              <p className="text-xs font-bold uppercase tracking-[0.12em] text-primary">Selected day</p>
-              <h4 className="mt-0.5 text-lg font-extrabold text-text-primary">{selectedWeekday.label}</h4>
+              <p className="hidden text-xs font-bold uppercase tracking-[0.12em] text-primary sm:block">Selected day</p>
+              <h4 className="text-base font-extrabold text-text-primary sm:mt-0.5 sm:text-lg">{selectedWeekday.label}</h4>
             </div>
-            <Button className="dashboard-primary-action" size="sm" variant="outline" onClick={() => openWeeklyCreate(selectedWeekday.value)} disabled={!data.vehicles.length} leadingIcon={<Plus className="h-4 w-4" />}>Add {selectedWeekday.label}</Button>
+            <Button className="px-3 sm:px-4" size="sm" variant="outline" onClick={() => openWeeklyCreate(selectedWeekday.value)} disabled={!data.vehicles.length} leadingIcon={<Plus className="h-4 w-4" />}><span className="sm:hidden">Add rule</span><span className="hidden sm:inline">Add {selectedWeekday.label}</span></Button>
           </div>
           {selectedDayTemplates.length ? (
             <div className="mt-3 grid gap-3 md:grid-cols-2">
               {selectedDayTemplates.map((template) => (
-                <article key={template.id} className="rounded-control border border-border bg-surface p-3 shadow-sm">
+                <article key={template.id} className="min-w-0 overflow-hidden rounded-control border border-border bg-surface p-3 shadow-sm">
                   <div className="flex items-start justify-between gap-2">
-                    <div>
-                      <p className="font-extrabold text-primary-dark">{formatClockTime12(template.departureTime)}</p>
-                      <p className="text-xs text-text-secondary">Loading {formatClockTime12(template.boardingTime)}</p>
+                    <div className="flex min-w-0 items-start gap-2 sm:hidden">
+                      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary-soft text-primary"><BusFront className="h-4 w-4" aria-hidden="true" /></span>
+                      <div className="min-w-0"><p className="break-words text-sm font-extrabold leading-5">{template.vehicle.driver}</p><p className="mt-0.5 break-all text-[0.7rem] text-text-secondary">{template.vehicle.vanId}</p></div>
+                    </div>
+                    <div className="hidden min-w-0 sm:block">
+                      <p className="text-[0.65rem] font-semibold text-text-secondary">Departure</p>
+                      <p className="text-lg font-extrabold text-primary-dark">{formatClockTime12(template.departureTime)}</p>
+                      <p className="mt-0.5 text-xs text-text-secondary">Loading <span className="font-semibold text-text-primary">{formatClockTime12(template.boardingTime)}</span></p>
                     </div>
                     <StatusBadge tone={template.isActive ? 'success' : 'neutral'}>{template.isActive ? 'Active' : 'Paused'}</StatusBadge>
                   </div>
-                  <p className="mt-2 truncate text-sm font-semibold">{template.vehicle.vanId} · {template.vehicle.driver}</p>
-                  <p className="mt-1 text-xs text-text-secondary">
-                    ₱{template.fareAmount.toFixed(2)} · {template.generatedCount} upcoming
-                  </p>
-                  <div className="mt-3 grid grid-cols-2 gap-2">
-                    <Button size="sm" variant="outline" onClick={() => openWeeklyEdit(template)} leadingIcon={<Pencil className="h-4 w-4" />}>Edit</Button>
-                    <Button size="sm" variant="ghost" disabled={saving} onClick={() => void toggleWeeklySchedule(template)} leadingIcon={template.isActive ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}>{template.isActive ? 'Pause' : 'Resume'}</Button>
-                    <Button size="sm" variant="danger" className="col-span-2" onClick={() => setRemovingWeekly(template)} leadingIcon={<Trash2 className="h-4 w-4" />}>Remove rule</Button>
+                  <dl className="mt-3 grid grid-cols-2 gap-2 sm:hidden">
+                    <div className="min-w-0 rounded-lg bg-cream p-2.5"><dt className="text-[0.7rem] font-semibold text-text-secondary">Loading</dt><dd className="mt-1 whitespace-nowrap text-base font-bold leading-tight">{formatClockTime12(template.boardingTime)}</dd></div>
+                    <div className="min-w-0 rounded-lg bg-primary-soft p-2.5 text-primary-dark"><dt className="text-[0.7rem] font-semibold">Departure</dt><dd className="mt-1 whitespace-nowrap text-base font-extrabold leading-tight">{formatClockTime12(template.departureTime)}</dd></div>
+                  </dl>
+                  <p className="mt-2 hidden break-all text-sm font-semibold sm:block">{template.vehicle.vanId}</p>
+                  <p className="mt-0.5 hidden break-words text-xs text-text-secondary sm:block">{template.vehicle.driver}</p>
+                  <div className="mt-3 flex flex-wrap items-center justify-between gap-2 sm:mt-2">
+                    <div><p className="text-[0.7rem] text-text-secondary sm:hidden">Fare</p><p className="text-base font-extrabold text-primary-dark sm:text-xs sm:font-bold">₱{template.fareAmount.toFixed(2)}</p></div>
+                    <span className="rounded-pill border border-border bg-cream px-2 py-1 text-[0.7rem] font-semibold text-text-secondary sm:rounded-none sm:border-0 sm:bg-transparent sm:p-0 sm:text-xs sm:font-normal">{template.generatedCount} upcoming</span>
+                  </div>
+                  <div className="mt-3 grid grid-cols-3 gap-1.5 border-t border-border pt-3 sm:grid-cols-2 sm:gap-2">
+                    <Button className="gap-1 px-2 text-xs sm:gap-2 sm:px-4 sm:text-sm" size="sm" variant="outline" onClick={() => openWeeklyEdit(template)} leadingIcon={<Pencil className="hidden h-4 w-4 sm:block" />}>Edit</Button>
+                    <Button className="gap-1 px-2 text-xs sm:gap-2 sm:px-4 sm:text-sm" size="sm" variant="ghost" disabled={saving} onClick={() => void toggleWeeklySchedule(template)} leadingIcon={template.isActive ? <Pause className="hidden h-4 w-4 sm:block" /> : <Play className="hidden h-4 w-4 sm:block" />}>{template.isActive ? 'Pause' : 'Resume'}</Button>
+                    <Button size="sm" variant="danger" className="gap-1 px-2 text-xs sm:col-span-2 sm:gap-2 sm:px-4 sm:text-sm" onClick={() => setRemovingWeekly(template)} leadingIcon={<Trash2 className="hidden h-4 w-4 sm:block" />} aria-label="Remove weekly rule"><span className="sm:hidden">Remove</span><span className="hidden sm:inline">Remove rule</span></Button>
                   </div>
                 </article>
               ))}
@@ -988,19 +1020,20 @@ function DispatcherGosoSchedulesPage() {
       </Card>
       <Card className="p-4 sm:p-5">
         <div className="border-b border-border pb-4">
-          <div className="flex flex-wrap items-center gap-2"><h3 className="text-lg font-extrabold">Driver assignments</h3><StatusBadge tone="info">This week</StatusBadge></div>
+          <div className="flex flex-wrap items-center gap-2"><h3 className="text-base font-extrabold sm:text-lg">Driver assignments</h3><StatusBadge tone="info">This week</StatusBadge></div>
         </div>
         {assignmentResponseSchedules.length ? (
-          <div className="mt-4 divide-y divide-border">
+          <div className="mt-3 space-y-3 sm:mt-4 sm:space-y-0 sm:divide-y sm:divide-border">
             {assignmentResponseSchedules.map((schedule) => (
-              <article key={schedule.id} className="flex flex-col gap-3 py-4 first:pt-0 last:pb-0 sm:flex-row sm:items-center sm:justify-between">
+              <article key={schedule.id} className="flex min-w-0 flex-col gap-3 rounded-control bg-cream p-3 sm:flex-row sm:items-center sm:justify-between sm:rounded-none sm:bg-transparent sm:px-0 sm:py-4 sm:first:pt-0 sm:last:pb-0">
                 <div className="min-w-0">
-                  <p className="font-extrabold text-text-primary">{schedule.vehicle.vanId} · {schedule.assignment?.driver}</p>
-                  <p className="mt-1 text-sm text-text-secondary">Loading {manilaDateTime(schedule.boardingStartTime)} · Departure {manilaDateTime(schedule.departureTime)}</p>
+                  <p className="break-all text-sm font-extrabold text-text-primary sm:text-base">{schedule.vehicle.vanId}</p>
+                  <p className="mt-0.5 break-words text-xs text-text-secondary sm:text-sm">{schedule.assignment?.driver}</p>
+                  <dl className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-text-secondary sm:text-sm"><div className="flex flex-wrap gap-x-1"><dt>Loading</dt><dd className="font-semibold text-text-primary">{manilaDateTime(schedule.boardingStartTime)}</dd></div><div className="flex flex-wrap gap-x-1"><dt>Departure</dt><dd className="font-semibold text-text-primary">{manilaDateTime(schedule.departureTime)}</dd></div></dl>
                 </div>
-                <div className="dashboard-actions">
+                <div className="dashboard-actions justify-between sm:justify-start">
                   <StatusBadge tone="success">Assigned</StatusBadge>
-                  <Button size="sm" variant="danger" onClick={() => setCancellingSchedule(schedule)} leadingIcon={<X className="h-4 w-4" />}>Cancel assignment</Button>
+                  <Button className="px-3 text-xs sm:px-4 sm:text-sm" size="sm" variant="danger" onClick={() => setCancellingSchedule(schedule)} leadingIcon={<X className="h-4 w-4" />}>Cancel assignment</Button>
                 </div>
               </article>
             ))}
@@ -1024,7 +1057,7 @@ function DispatcherGosoSchedulesPage() {
         title={editingWeekly ? 'Edit weekly schedule' : 'Set weekly schedule'}
         description="Repeats every week until changed · Asia/Manila time."
         onClose={() => { if (!saving) { setAdditionalScheduleWarning([]); setWeeklyModalOpen(false); } }}
-        className="max-w-lg"
+        className="max-w-lg p-4 sm:p-6 [&>footer]:flex-row [&>footer>.ui-button:last-child]:flex-1 sm:[&>footer>.ui-button:last-child]:flex-none"
         footer={<><Button variant="ghost" disabled={saving} onClick={() => { setAdditionalScheduleWarning([]); setWeeklyModalOpen(false); }}>Cancel</Button><Button loading={saving} disabled={!weeklyForm.vehicleId || Boolean(weeklyTimeError)} onClick={() => void saveWeeklySchedule()}>{editingWeekly ? 'Save weekly rule' : 'Start weekly schedule'}</Button></>}
       >
         <div className="space-y-4">
@@ -1032,9 +1065,9 @@ function DispatcherGosoSchedulesPage() {
           <Select label="Day of week" value={weeklyForm.weekday} onChange={(event) => { setWeeklyForm({ ...weeklyForm, weekday: event.target.value }); setAdditionalScheduleWarning([]); setWeeklyModalError(null); }}>
             {WEEKDAYS.map((day) => <option key={day.value} value={day.value}>{day.label}</option>)}
           </Select>
-          <div className="grid grid-cols-2 gap-3">
-            <Input label="Loading time" type="time" value={weeklyForm.boardingTime} onChange={(event) => { setWeeklyForm({ ...weeklyForm, boardingTime: event.target.value }); setWeeklyModalError(null); }} required />
-            <Input label="Departure time" type="time" value={weeklyForm.departureTime} onChange={(event) => { setWeeklyForm({ ...weeklyForm, departureTime: event.target.value }); setWeeklyModalError(null); }} required />
+          <div className="grid grid-cols-2 gap-3 [&>div]:min-w-0">
+            <Input className="min-w-0 px-2 sm:px-3" label="Loading time" type="time" value={weeklyForm.boardingTime} onChange={(event) => { setWeeklyForm({ ...weeklyForm, boardingTime: event.target.value }); setWeeklyModalError(null); }} required />
+            <Input className="min-w-0 px-2 sm:px-3" label="Departure time" type="time" value={weeklyForm.departureTime} onChange={(event) => { setWeeklyForm({ ...weeklyForm, departureTime: event.target.value }); setWeeklyModalError(null); }} required />
           </div>
           {weeklyTimeError ? <p className="rounded-control bg-warning-soft px-3 py-2 text-sm font-semibold text-warning">{weeklyTimeError}</p> : null}
           <Select label="Van and driver" value={weeklyForm.vehicleId} onChange={(event) => { setWeeklyForm({ ...weeklyForm, vehicleId: event.target.value }); setAdditionalScheduleWarning([]); setWeeklyModalError(null); }} hint="A driver may have multiple departures on the same weekday at different times.">
@@ -1045,10 +1078,10 @@ function DispatcherGosoSchedulesPage() {
             <span><span className="block text-sm font-semibold text-text-primary">Active weekly rule</span><span className="block text-xs text-text-secondary">Paused rules do not generate new departures.</span></span>
             <input type="checkbox" checked={weeklyForm.isActive} onChange={(event) => setWeeklyForm({ ...weeklyForm, isActive: event.target.checked })} className="h-5 w-5 accent-primary" />
           </label>
-          <details className="rounded-control border border-border">
+          <details className="group rounded-control border border-border">
             <summary className="flex min-h-touch cursor-pointer list-none items-center justify-between gap-3 px-3 py-2 text-sm font-semibold [&::-webkit-details-marker]:hidden">
               <span>Fare</span>
-              <span className="font-normal text-text-secondary">{fareLabel(weeklyForm.fareAmount)}</span>
+              <span className="flex items-center gap-2 font-normal text-text-secondary">{fareLabel(weeklyForm.fareAmount)}<ChevronDown className="h-4 w-4 shrink-0 transition-transform group-open:rotate-180" aria-hidden="true" /></span>
             </summary>
             <div className="border-t border-border p-3">
               <Input label="Fare amount" type="number" min={1} step="0.01" value={weeklyForm.fareAmount} onChange={(event) => setWeeklyForm({ ...weeklyForm, fareAmount: event.target.value })} />

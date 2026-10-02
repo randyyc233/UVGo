@@ -9,7 +9,7 @@ All ten delivery phases are complete. The implementation follows the supplied mo
 - Client: React 19, TypeScript, Vite, React Router, Tailwind CSS, Lucide icons, Mapbox GL JS
 - Server: Node.js, Express 5, TypeScript, Zod, JWT cookie sessions, Helmet, rate limiting, Multer
 - Data: MySQL 8.4 and Prisma 6
-- Payments: GCash and merchant-hosted PayPal checkout using receipt uploads and dispatcher verification, with legacy SDK PayPal records retained for compatibility
+- Payments: integrated PayPal Sandbox checkout with verified automatic confirmation, plus GCash receipts with dispatcher verification; historical hosted PayPal records remain supported
 - Quality: TypeScript, ESLint, Node test runner through `tsx`, production builds, and rendered browser QA
 
 ## Architecture
@@ -83,8 +83,8 @@ Backend variables:
 | `GMAIL_APP_PASSWORD` | Google App Password for SMTP; never use the account's normal password |
 | `EMAIL_FROM_NAME` | Sender display name; defaults to `UVGo` |
 | `EMAIL_CODE_TTL_MINUTES` | Verification/reset code lifetime; defaults to 10 minutes |
-| `PAYPAL_CLIENT_ID` | Optional PayPal Sandbox client ID |
-| `PAYPAL_CLIENT_SECRET` | Optional PayPal Sandbox secret |
+| `PAYPAL_CLIENT_ID` | PayPal Sandbox client ID, required for integrated checkout |
+| `PAYPAL_CLIENT_SECRET` | Server-only PayPal Sandbox secret, required for integrated checkout |
 | `PAYPAL_BASE_URL` | PayPal Sandbox API base URL |
 | `UPLOAD_DIR` | Private GCash and PayPal receipt directory; persist it across redeployments |
 | `DEMO_MODE` | Enables local payment fallback and simulation controls |
@@ -185,15 +185,32 @@ Sign in as either route dispatcher and open **More** to access demo-only operati
 
 Every simulation is written to the dispatch audit log. See [docs/demo-runbook.md](docs/demo-runbook.md) for a guided presentation sequence.
 
-## PayPal receipt flow and legacy SDK compatibility
+## Integrated PayPal Sandbox checkout
 
-New passenger bookings can use the merchant-supplied Pay Now button. After paying on PayPal, the passenger returns to UVGo and uploads a required JPG, PNG, or WEBP receipt of up to 5 MB. The transaction reference is optional. The booking remains pending verification until the Goa dispatcher checks the merchant account and approves or rejects it. Opening PayPal or uploading a receipt does not automatically verify payment.
+Student and senior citizen counts can be selected per booking for a 20% discount on
+each eligible seat. Passengers must acknowledge that valid IDs will be checked at the
+terminal. The server quotes and saves the discounted total for PayPal and GCash; the
+summary and mobile action area display that same amount. Existing bookings default
+to zero discount. See [passenger booking discounts](docs/passenger-booking.md).
 
-The hosted button uses its existing merchant URL and does not need PayPal SDK credentials. Keep the private receipt directory on persistent storage when redeploying. Existing SDK-created and captured PayPal records remain supported.
+Configure the Sandbox REST app's `PAYPAL_CLIENT_ID` and `PAYPAL_CLIENT_SECRET` privately in
+`server/.env`, keeping `PAYPAL_BASE_URL=https://api-m.sandbox.paypal.com`. The authenticated
+frontend loads the public client ID from `/api/passenger/paypal/config`; the secret stays on
+the server. Missing credentials and live API configuration are refused by this Sandbox flow.
 
-If the legacy Sandbox path must be exercised, set `PAYPAL_CLIENT_ID` and `PAYPAL_CLIENT_SECRET` in `server/.env` using credentials from a PayPal Sandbox application. Keep `PAYPAL_BASE_URL=https://api-m.sandbox.paypal.com`.
+New PayPal bookings use the SDK button inside the payment screen. Existing seat checks hold
+the selected seats, the server calculates the order amount, and a verified completed PHP
+capture automatically confirms the booking. Payment approval alone never confirms a booking.
+There is no receipt-upload requirement for this integrated flow.
 
-When credentials are configured, UVGo creates and captures real Sandbox orders. With blank credentials and `DEMO_MODE=true`, it creates a local `DEMO-*` order and completes capture locally so the full booking state transition remains demonstrable. Production mode never falls back to demo capture.
+Retries reconcile the stored PayPal order. Cancellation releases only verified unpaid holds;
+completed payments are recovered, while approved/pending payments remain held. My Bookings
+lets passengers resume or check an interrupted checkout. The initial local Sandbox integration
+has no public webhook, so use these checks to reconcile a payment after the browser closes.
+See `docs/passenger-booking.md` for the endpoints, verification and recovery behavior.
+
+GCash and historical hosted PayPal receipts keep dispatcher verification. The historical hosted
+API remains for compatibility but is not displayed as a second payment option in new bookings.
 
 ## GCash receipt flow
 
@@ -216,7 +233,7 @@ This prototype does not connect to a GCash merchant API.
 - Seats are unique per trip and checked again inside the reservation transaction.
 - Scheduled assignments are active immediately; cancellation invokes the existing replacement and passenger-reallocation workflow.
 - Queue-position overrides accept an optional reason and always create a `DispatchLog`; delay, move-to-last, and replacement actions still require a reason.
-- Rescheduling closes 24 hours before departure and preserves passenger count.
+- Rescheduling closes five hours before loading, allows three successful changes per reservation, and preserves passenger count.
 - An unavailable vehicle reallocates eligible reservations and notifies affected passengers.
 - Detailed fleet/geofence visualization is dispatcher-only; drivers receive operational status rather than continuous GPS maps.
 
@@ -252,7 +269,7 @@ npm run demo:reset
 - This is a single-terminal capstone prototype, not a multi-tenant production dispatch platform.
 - Dispatcher maps show the current operational snapshot; permanent detailed location history is intentionally excluded.
 - Driver location transitions are submitted events, not continuous background mobile GPS tracking.
-- Legacy PayPal regression coverage requires Sandbox credentials for external approval; demo mode supplies a clearly isolated local fallback.
+- PayPal regression tests use isolated demo helpers and mocked provider responses; the test runner strips real PayPal credentials so tests cannot charge an account.
 - GCash verification is manual and receipt images use local disk storage.
 - Booking and dispatch notifications remain in-app records; email delivery is limited to account verification and password recovery.
 - The application uses seeded Philippine routes and fares and does not include an administrator role.

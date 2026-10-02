@@ -17,9 +17,9 @@ import { HeroBackgroundSlideshow } from '../../components/public/HeroBackgroundS
 import { RouteCards } from '../../components/public/RouteCards';
 
 const serviceHighlights = [
-  { icon: TicketCheck, title: 'Live seat availability', text: 'View open Goa seats before booking.' },
+  { icon: TicketCheck, title: 'Live seat availability', text: 'Check open seats before booking.' },
   { icon: ShieldCheck, title: 'Verified departures', text: 'Trusted terminal and trip information.' },
-  { icon: Radio, title: 'Queue updates', text: 'View which vans are currently in the queue.' },
+  { icon: Radio, title: 'Queue updates', text: 'Check which vans are currently in the queue.' },
   { icon: LockKeyhole, title: 'Secure booking', text: 'Pay with the official PayPal button, then track verification in UVGo.' },
 ];
 

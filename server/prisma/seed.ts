@@ -50,6 +50,7 @@ export async function clearDemoData() {
     prisma.tayaDailySchedule.deleteMany(),
     prisma.tayaWeeklySchedule.deleteMany(),
     prisma.dispatcherAlertRead.deleteMany(),
+    prisma.publicRouteFare.deleteMany(),
     prisma.reservationSeat.deleteMany(),
     prisma.payment.deleteMany(),
     prisma.notification.deleteMany(),

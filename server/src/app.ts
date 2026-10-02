@@ -1,4 +1,5 @@
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import cors from 'cors';
@@ -22,18 +23,22 @@ if (env.NODE_ENV === 'development') {
 }
 
 app.disable('x-powered-by');
+app.use((_request, response, next) => {
+  response.locals.cspNonce = randomBytes(24).toString('base64');
+  next();
+});
 app.use(
   helmet({
     crossOriginOpenerPolicy: { policy: 'same-origin-allow-popups' },
     contentSecurityPolicy: {
       directives: {
         defaultSrc: ["'self'"],
-        connectSrc: ["'self'", 'https://accounts.google.com/gsi/', 'https://api.mapbox.com', 'https://events.mapbox.com', 'https://*.tiles.mapbox.com'],
+        connectSrc: ["'self'", 'https://accounts.google.com/gsi/', 'https://api.mapbox.com', 'https://events.mapbox.com', 'https://*.tiles.mapbox.com', 'https://www.paypal.com', 'https://www.sandbox.paypal.com'],
         fontSrc: ["'self'", 'data:'],
-        frameSrc: ["'self'", 'https://accounts.google.com/gsi/'],
+        frameSrc: ["'self'", 'https://accounts.google.com/gsi/', 'https://www.paypal.com', 'https://www.sandbox.paypal.com'],
         formAction: ["'self'", 'https://www.paypal.com'],
-        imgSrc: ["'self'", 'data:', 'blob:', 'https://api.mapbox.com', 'https://*.tiles.mapbox.com'],
-        scriptSrc: ["'self'", 'https://accounts.google.com/gsi/client'],
+        imgSrc: ["'self'", 'data:', 'blob:', 'https://api.mapbox.com', 'https://*.tiles.mapbox.com', 'https://www.paypal.com', 'https://www.sandbox.paypal.com', 'https://www.paypalobjects.com'],
+        scriptSrc: ["'self'", (_request, response) => `'nonce-${(response as express.Response).locals.cspNonce}'`, 'https://accounts.google.com/gsi/client', 'https://www.paypal.com', 'https://www.sandbox.paypal.com', 'https://www.paypalobjects.com'],
         styleSrc: ["'self'", "'unsafe-inline'"],
         workerSrc: ["'self'", 'blob:'],
       },
@@ -78,13 +83,15 @@ if (env.NODE_ENV === 'production') {
   }
 
   app.use(express.static(clientDistDirectory, { index: false }));
+  const clientHtml = readFileSync(clientIndexFile, 'utf8');
   app.use((request, response, next) => {
     if (request.method !== 'GET' || request.path === '/api' || request.path.startsWith('/api/')) {
       next();
       return;
     }
 
-    response.sendFile(clientIndexFile);
+    response.setHeader('Cache-Control', 'no-store');
+    response.type('html').send(clientHtml.replace('</head>', `<meta name="csp-nonce" content="${response.locals.cspNonce}" /></head>`));
   });
 }
 

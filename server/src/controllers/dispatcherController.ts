@@ -9,6 +9,7 @@ import {
   deleteDispatchLog,
   dismissAllDispatcherAlerts,
   dismissDispatcherAlert,
+  dismissDispatcherPayment,
   getDispatchLogs,
   getDispatcherDashboard,
   getDispatcherPayments,
@@ -44,6 +45,11 @@ import { cancelAssignmentByDispatcher } from '../services/driverService.js';
 import { SESSION_COOKIE } from '../middleware/authMiddleware.js';
 import { createBackupDispatcher, getRouteDispatchers } from '../services/dispatcherAccountService.js';
 import { getTayaWeeklySchedule, saveTayaWeeklySchedule } from '../services/tayaQueueService.js';
+import { getDispatcherPublicFare, updateDispatcherPublicFare } from '../services/publicFareService.js';
+import { publicRouteFareSchema } from '../validators/dispatcherValidators.js';
+import { departureHistoryQuerySchema } from '../validators/dispatcherValidators.js';
+import { dismissDepartureHistory, getDepartureHistory } from '../services/departureHistoryService.js';
+import { manilaServiceDay } from '../services/driverSchedulePolicy.js';
 
 function routeParameter(value: unknown) {
   if (typeof value !== 'string') throw new AppError(400, 'INVALID_ROUTE_PARAMETER', 'The requested resource identifier is invalid.');
@@ -57,6 +63,15 @@ function dispatcherRoute(request: Request): RouteCode {
 
 export async function dashboard(request: Request, response: Response) {
   response.status(200).json({ dashboard: await getDispatcherDashboard(dispatcherRoute(request), request.auth!.userId) });
+}
+
+export async function publicFare(request: Request, response: Response) {
+  response.status(200).json({ publicFare: await getDispatcherPublicFare(request.auth!.userId) });
+}
+
+export async function updatePublicFare(request: Request, response: Response) {
+  const input = publicRouteFareSchema.parse(request.body);
+  response.status(200).json({ publicFare: await updateDispatcherPublicFare(request.auth!.userId, input.fareAmount) });
 }
 
 export async function updateProfile(request: Request, response: Response) {
@@ -114,8 +129,22 @@ export async function queueAction(request: Request, response: Response) {
   response.status(200).json({ queue: await applyQueueAction(request.auth!.userId, dispatcherRoute(request), routeParameter(request.params.queueEntryId), input) });
 }
 
+export async function departureHistory(request: Request, response: Response) {
+  const { date } = departureHistoryQuerySchema.parse({ date: request.query.date ?? manilaServiceDay(new Date()).date });
+  response.status(200).json(await getDepartureHistory(request.auth!.userId, dispatcherRoute(request), date));
+}
+
+export async function deleteDepartureHistory(request: Request, response: Response) {
+  await dismissDepartureHistory(request.auth!.userId, dispatcherRoute(request), routeParameter(request.params.tripId));
+  response.status(204).end();
+}
+
 export async function payments(request: Request, response: Response) {
-  response.status(200).json({ payments: await getDispatcherPayments(dispatcherRoute(request)) });
+  response.status(200).json({ payments: await getDispatcherPayments(dispatcherRoute(request), request.auth!.userId) });
+}
+
+export async function deletePayment(request: Request, response: Response) {
+  response.status(200).json({ payments: await dismissDispatcherPayment(request.auth!.userId, dispatcherRoute(request), routeParameter(request.params.paymentId)) });
 }
 
 export async function paymentDecision(request: Request, response: Response) {

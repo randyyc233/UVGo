@@ -34,6 +34,7 @@ const dispatcherPages = () => import('./pages/dispatcher/DispatcherPages');
 const DispatcherDashboardPage = lazy(async () => ({ default: (await dispatcherPages()).DispatcherDashboardPage }));
 const DispatcherFleetPage = lazy(async () => ({ default: (await dispatcherPages()).DispatcherFleetPage }));
 const DispatcherQueuePage = lazy(async () => ({ default: (await dispatcherPages()).DispatcherQueuePage }));
+const DispatcherDepartureHistoryPage = lazy(async () => ({ default: (await dispatcherPages()).DispatcherDepartureHistoryPage }));
 const DispatcherPaymentsPage = lazy(async () => ({ default: (await dispatcherPages()).DispatcherPaymentsPage }));
 const DispatcherAlertsPage = lazy(async () => ({ default: (await dispatcherPages()).DispatcherAlertsPage }));
 const DispatcherLogsPage = lazy(async () => ({ default: (await dispatcherPages()).DispatcherLogsPage }));
@@ -104,6 +105,7 @@ export function App() {
       <Route path="/dispatcher/dashboard" element={<ProtectedRoute role="dispatcher"><DispatcherPortalRoute title="Dispatcher Dashboard"><DispatcherDashboardPage /></DispatcherPortalRoute></ProtectedRoute>} />
       <Route path="/dispatcher/fleet" element={<ProtectedRoute role="dispatcher"><DispatcherPortalRoute title="Fleet Map" hideMobileHeading><DispatcherFleetPage /></DispatcherPortalRoute></ProtectedRoute>} />
       <Route path="/dispatcher/queue" element={<ProtectedRoute role="dispatcher"><DispatcherPortalRoute title="Queue Management"><DispatcherQueuePage /></DispatcherPortalRoute></ProtectedRoute>} />
+      <Route path="/dispatcher/departure-history" element={<ProtectedRoute role="dispatcher"><DispatcherPortalRoute title="Departure History"><DispatcherDepartureHistoryPage /></DispatcherPortalRoute></ProtectedRoute>} />
       <Route path="/dispatcher/payments" element={<ProtectedRoute role="dispatcher"><DispatcherPortalRoute title="Payment Verification"><DispatcherPaymentsPage /></DispatcherPortalRoute></ProtectedRoute>} />
       <Route path="/dispatcher/logs" element={<ProtectedRoute role="dispatcher"><DispatcherPortalRoute title="Reports & Logs"><DispatcherLogsPage /></DispatcherPortalRoute></ProtectedRoute>} />
       <Route path="/dispatcher/drivers" element={<ProtectedRoute role="dispatcher"><DispatcherPortalRoute title="Drivers & Vehicles"><DispatcherDriversPage /></DispatcherPortalRoute></ProtectedRoute>} />

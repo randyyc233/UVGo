@@ -4,6 +4,7 @@ import {
   ArrowRight,
   CalendarDays,
   CheckCircle2,
+  ChevronDown,
   CircleX,
   Clock3,
   MapPin,
@@ -16,7 +17,7 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { apiRequest, ApiError } from '../../api/http';
 import { useAuth } from '../../auth/authContext';
 import { BookingSummary } from '../../components/passenger/BookingSummary';
-import { PayPalHostedButton } from '../../components/passenger/PayPalHostedButton';
+import { PayPalCheckout } from '../../components/passenger/PayPalCheckout';
 import { VanSeatPicker } from '../../components/passenger/VanSeatPicker';
 import { ReservationAction } from '../../components/passenger/ReservationAction';
 import { ScheduleTripCard } from '../../components/passenger/ScheduleTripCard';
@@ -24,7 +25,7 @@ import { useMobileSectionScroll } from '../../hooks/useMobileSectionScroll';
 import { Button, Card, Input, LoadingSkeleton, Stepper } from '../../components/ui';
 import { cn } from '../../lib/cn';
 import { formatTime12 } from '../../lib/dateTime';
-import type { GoaTrip, PassengerBooking, TripSeat } from '../../types/passenger';
+import type { GoaTrip, PassengerBooking, ReservationFareQuote, TripSeat } from '../../types/passenger';
 
 const steps = [
   { id: 'search', label: 'Choose trip' },
@@ -77,15 +78,20 @@ export function PassengerBookingPage() {
   const [trips, setTrips] = useState<GoaTrip[]>([]);
   const [trip, setTrip] = useState<GoaTrip | null>(null);
   const [seats, setSeats] = useState<TripSeat[]>([]);
-  const [selectedSeats, setSelectedSeats] = useState<number[]>([]);
+  const [selectedSeats, updateSelectedSeats] = useState<number[]>([]);
   const [contact, setContact] = useState(user?.contact ?? '');
   const [paymentMethod, setPaymentMethod] = useState<'paypal' | 'gcash'>('gcash');
   const [gcashReference, setGcashReference] = useState('');
   const [receipt, setReceipt] = useState<File | null>(null);
-  const [paypalReference, setPaypalReference] = useState('');
-  const [paypalReceipt, setPaypalReceipt] = useState<File | null>(null);
-  const paypalReceiptInput = useRef<HTMLInputElement>(null);
+  const [paypalBusy, setPaypalBusy] = useState(false);
+  const [studentPassengers, setStudentPassengers] = useState(0);
+  const [seniorPassengers, setSeniorPassengers] = useState(0);
+  const [discountIdAcknowledged, setDiscountIdAcknowledged] = useState(false);
+  const [fareQuote, setFareQuote] = useState<{ key: string; quote: ReservationFareQuote } | null>(null);
+  const [quoteError, setQuoteError] = useState<{ key: string; message: string } | null>(null);
+  const [quoteAttempt, setQuoteAttempt] = useState(0);
   const [booking, setBooking] = useState<PassengerBooking | null>(null);
+  const [confirmationDetailsExpanded, setConfirmationDetailsExpanded] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const schedulesSection = useRef<HTMLDivElement>(null);
@@ -122,7 +128,42 @@ export function PassengerBookingPage() {
     };
   }, [booking?.payment?.status, booking?.reference]);
 
-  const total = useMemo(() => trip ? trip.fare * selectedSeats.length : 0, [selectedSeats.length, trip]);
+  const subtotal = useMemo(() => trip ? trip.fare * selectedSeats.length : 0, [selectedSeats.length, trip]);
+  const hasDiscount = studentPassengers + seniorPassengers > 0;
+  const quoteKey = JSON.stringify({ tripId: trip?.id, seats: selectedSeats, studentPassengers, seniorPassengers, attempt: quoteAttempt });
+  const discountQuote = hasDiscount && fareQuote?.key === quoteKey ? fareQuote.quote : undefined;
+  const currentQuoteError = hasDiscount && quoteError?.key === quoteKey ? quoteError.message : null;
+  const priceReady = !hasDiscount || Boolean(discountQuote);
+  const total = discountQuote?.totalAmount ?? subtotal;
+
+  function resetDiscounts() {
+    setStudentPassengers(0); setSeniorPassengers(0); setDiscountIdAcknowledged(false);
+    if (hasDiscount) { setReceipt(null); setGcashReference(''); }
+  }
+
+  function setSelectedSeats(nextSeats: number[]) {
+    updateSelectedSeats(nextSeats);
+    resetDiscounts();
+  }
+
+  useEffect(() => {
+    const request = JSON.parse(quoteKey) as { tripId?: string; seats: number[]; studentPassengers: number; seniorPassengers: number; attempt: number };
+    if (!request.tripId || !request.seats.length || !request.studentPassengers && !request.seniorPassengers) return;
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      void apiRequest<{ quote: ReservationFareQuote }>('/passenger/reservations/quote', {
+        method: 'POST', body: JSON.stringify(request), signal: controller.signal,
+      }).then((result) => {
+        if (!controller.signal.aborted) {
+          setFareQuote({ key: quoteKey, quote: result.quote });
+          setQuoteError((current) => current?.key === quoteKey ? null : current);
+        }
+      }).catch((caught) => {
+        if (!controller.signal.aborted) setQuoteError({ key: quoteKey, message: caught instanceof Error ? caught.message : 'The discounted fare could not be checked.' });
+      });
+    }, 200);
+    return () => { window.clearTimeout(timer); controller.abort(); };
+  }, [quoteKey]);
 
   async function searchTrips(event: FormEvent) {
     event.preventDefault();
@@ -132,7 +173,7 @@ export function PassengerBookingPage() {
     try {
       const response = await apiRequest<{ trips: GoaTrip[] }>(`/passenger/trips?date=${encodeURIComponent(date)}&passengers=${passengers}`);
       setTrips(response.trips);
-      if (!response.trips.length) setError('No Goa trips are scheduled for this date. Try the next day.');
+      if (!response.trips.length) setError('No Goa trips are open for reservations on this date. Reservations close 5 hours before loading time. Try another date.');
     } catch (caughtError) {
       setError(caughtError instanceof ApiError ? caughtError.message : 'Trips could not be loaded.');
     } finally {
@@ -167,12 +208,14 @@ export function PassengerBookingPage() {
 
   function continueFromPassenger() {
     setError(null);
+    if (!priceReady) { setError(currentQuoteError ?? 'Wait while the discounted fare is checked.'); return; }
+    if (hasDiscount && !discountIdAcknowledged) { setError('Confirm that discounted passengers will bring valid IDs to the terminal.'); return; }
     if (contact.trim().length < 7) {
       setError('Enter a valid mobile or contact number.');
       return;
     }
     if (paymentMethod === 'gcash' && !trip?.gcashRecipient) {
-      setError('GCash is not configured for this trip. Choose the posted PayPal button instead.');
+      setError('GCash is not configured for this trip. Choose PayPal instead.');
       return;
     }
     if (paymentMethod === 'gcash' && !receipt) {
@@ -182,26 +225,23 @@ export function PassengerBookingPage() {
     setStep(4);
   }
 
-  function chooseReceipt(file: File | undefined, method: 'gcash' | 'paypal' = 'gcash') {
-    const setSelectedReceipt = method === 'paypal' ? setPaypalReceipt : setReceipt;
+  function chooseReceipt(file: File | undefined) {
     setError(null);
     if (!file) {
-      setSelectedReceipt(null);
+      setReceipt(null);
       return;
     }
     if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
-      setSelectedReceipt(null);
-      if (method === 'paypal' && paypalReceiptInput.current) paypalReceiptInput.current.value = '';
+      setReceipt(null);
       setError('Receipt must be a JPG, JPEG, PNG, or WEBP image.');
       return;
     }
     if (file.size > 5 * 1024 * 1024) {
-      setSelectedReceipt(null);
-      if (method === 'paypal' && paypalReceiptInput.current) paypalReceiptInput.current.value = '';
+      setReceipt(null);
       setError('Receipt images must be 5 MB or smaller.');
       return;
     }
-    setSelectedReceipt(file);
+    setReceipt(file);
   }
 
   async function returnToSeatSelection(message: string) {
@@ -215,50 +255,6 @@ export function PassengerBookingPage() {
     }
     setError(message);
     setStep(2);
-  }
-
-  /**
-   * Records a passenger-reported payment from PayPal's external single-button
-   * checkout. UVGo receives no authenticated order or capture id, so the
-   * booking stays PENDING_VERIFICATION until a dispatcher checks the merchant
-   * account. A receipt is required; the transaction reference is optional.
-   */
-  async function confirmPaypalHostedBooking(event: FormEvent) {
-    event.preventDefault();
-    if (!trip || loading) return;
-    if (selectedSeats.length !== passengers) {
-      await returnToSeatSelection(`Choose exactly ${passengers} seat${passengers === 1 ? '' : 's'} before submitting.`);
-      return;
-    }
-    if (!paypalReceipt) {
-      setError('Upload your PayPal receipt before submitting the payment.');
-      return;
-    }
-    setLoading(true);
-    setError(null);
-    try {
-      const body = new FormData();
-      body.set('tripId', trip.id);
-      body.set('seats', JSON.stringify(selectedSeats));
-      body.set('contact', contact);
-      body.set('paypalTransactionReference', paypalReference);
-      body.set('receipt', paypalReceipt);
-      const response = await apiRequest<{ booking: PassengerBooking }>('/passenger/reservations/paypal/hosted', {
-        method: 'POST',
-        body,
-      });
-      setBooking(response.booking);
-      setStep(5);
-    } catch (caughtError) {
-      setError(caughtError instanceof ApiError ? caughtError.message : 'The booking could not be completed.');
-      if (caughtError instanceof ApiError && caughtError.code === 'SEAT_UNAVAILABLE') {
-        await returnToSeatSelection('Those seats were just reserved by another passenger. Your reservation was not submitted. Do not pay again—choose other available seats and reuse the same PayPal receipt, or contact the terminal.');
-      } else if (caughtError instanceof ApiError && caughtError.code === 'TRIP_CLOSED') {
-        setError('This departure closed before your payment report was submitted, so no reservation was created. Do not pay again—keep the PayPal receipt and contact the terminal for assistance.');
-      }
-    } finally {
-      setLoading(false);
-    }
   }
 
   async function confirmGcashBooking(event: FormEvent) {
@@ -275,6 +271,11 @@ export function PassengerBookingPage() {
       body.set('tripId', trip.id);
       body.set('seats', JSON.stringify(selectedSeats));
       body.set('contact', contact);
+      if (hasDiscount) {
+        body.set('studentPassengers', String(studentPassengers));
+        body.set('seniorPassengers', String(seniorPassengers));
+        body.set('discountIdAcknowledged', String(discountIdAcknowledged));
+      }
       body.set('gcashReference', gcashReference);
       body.set('receipt', receipt);
       const response = await apiRequest<{ booking: PassengerBooking }>('/passenger/reservations/gcash', { method: 'POST', body });
@@ -312,13 +313,13 @@ export function PassengerBookingPage() {
                   <Input label="Departure date" type="date" min={tomorrow()} value={date} onChange={(event) => setDate(event.target.value)} leadingIcon={<CalendarDays className="h-4 w-4" />} required />
                   <label className="block text-sm font-semibold">
                     Passengers
-                    <select value={passengers} onChange={(event) => setPassengers(Number(event.target.value))} className="mt-1.5 min-h-touch w-full rounded-control border border-border-strong bg-white px-3 text-base" aria-describedby="passenger-limit">
+                    <select value={passengers} onChange={(event) => setPassengers(Number(event.target.value))} className="mt-1.5 min-h-touch w-full rounded-control border border-border-strong bg-white px-3 text-base">
                       {Array.from({ length: maxPassengers }, (_, index) => index + 1).map((count) => <option key={count} value={count}>{count} Passenger{count === 1 ? '' : 's'}</option>)}
                     </select>
-                    <span id="passenger-limit" className="mt-2 block text-sm font-normal text-text-secondary">{trip ? `${trip.availableSeats} seats left · Maximum ${maxPassengers} passengers` : 'Maximum 11 passengers per reservation'}</span>
                   </label>
                   <Button type="submit" loading={loading} trailingIcon={<ArrowRight className="h-4 w-4" />}>Search trips</Button>
                 </form>
+                <p className="mt-3 text-xs text-text-secondary">Reservations close 5 hours before loading time.</p>
               </Card>
               <div ref={schedulesSection} tabIndex={-1} className="reservation-scroll-target mt-5" aria-label="Available schedules">
                 {trips.length ? <div className="mb-4"><h2 className="text-xl font-extrabold">Choose your schedule</h2><p className="mt-1 text-sm text-text-secondary">Tap a card to select your departure, then choose your seats.</p></div> : null}
@@ -341,46 +342,83 @@ export function PassengerBookingPage() {
           ) : null}
 
           {step === 3 && trip ? (
-            <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_22rem]">
-              <Card className="p-5 sm:p-7">
+            <div className="reservation-passenger-details grid min-w-0 gap-4 sm:gap-5 lg:grid-cols-[minmax(0,1fr)_22rem]">
+              <details className="group min-w-0 rounded-card border border-border bg-surface lg:hidden">
+                <summary className="flex min-h-touch cursor-pointer list-none items-center justify-between gap-3 p-4 [&::-webkit-details-marker]:hidden">
+                  <div className="min-w-0"><p className="text-sm font-extrabold text-primary-dark">Your Goa trip · {selectedSeats.length} passenger{selectedSeats.length === 1 ? '' : 's'}</p><p className="mt-1 text-xs text-text-secondary">{formatTripDate(trip.departureTime)} · {formatTripTime(trip.departureTime)} · View summary</p></div>
+                  <ChevronDown className="h-5 w-5 shrink-0 text-primary transition-transform group-open:rotate-180" aria-hidden="true" />
+                </summary>
+                <div className="px-3 pb-3"><BookingSummary trip={trip} seats={selectedSeats} paymentMethod={paymentMethod} total={total} discountQuote={discountQuote} compact /></div>
+              </details>
+              <Card className="min-w-0 p-4 sm:p-7">
                 <p className="text-xs font-bold uppercase tracking-[0.12em] text-primary">Passenger information</p>
-                <h1 className="mt-1 text-2xl font-black">Your contact details</h1>
-                <p className="mt-2 text-sm leading-6 text-text-secondary">We use these details for booking and payment updates.</p>
-                <div className="mt-6 grid gap-4 sm:grid-cols-2">
-                  <Input label="Full name" value={user?.name ?? ''} disabled />
-                  <Input label="Email address" type="email" value={user?.email ?? ''} disabled />
-                  <Input label="Mobile number" type="tel" autoComplete="tel" inputMode="tel" value={contact} onChange={(event) => { setContact(event.target.value); if (error) setError(null); }} leadingIcon={<Smartphone className="h-4 w-4" />} className="sm:col-span-2" />
+                <h1 className="mt-1 text-xl font-black sm:text-2xl">Your contact details</h1>
+                <p className="mt-1 text-sm leading-5 text-text-secondary sm:mt-2 sm:leading-6">For booking and payment updates.</p>
+                <dl className="mt-4 space-y-2 rounded-control bg-cream p-3 text-sm sm:hidden">
+                  <div className="flex items-start justify-between gap-3"><dt className="shrink-0 text-text-secondary">Name</dt><dd className="min-w-0 text-right font-bold">{user?.name}</dd></div>
+                  <div className="flex items-start justify-between gap-3"><dt className="shrink-0 text-text-secondary">Email</dt><dd className="min-w-0 break-all text-right">{user?.email}</dd></div>
+                </dl>
+                <div className="mt-4 grid gap-4 sm:mt-6 sm:grid-cols-2">
+                  <div className="hidden sm:block"><Input label="Full name" value={user?.name ?? ''} disabled /></div>
+                  <div className="hidden sm:block"><Input label="Email address" type="email" value={user?.email ?? ''} disabled /></div>
+                  <div className="sm:col-span-2"><Input label="Mobile number" type="tel" autoComplete="tel" inputMode="tel" value={contact} onChange={(event) => { setContact(event.target.value); if (error) setError(null); }} leadingIcon={<Smartphone className="h-4 w-4" />} /></div>
                 </div>
-                <fieldset className="mt-7">
+                <fieldset className="mt-5 min-w-0 rounded-card border border-border p-3 sm:mt-7 sm:p-4">
+                  <legend className="px-1 text-sm font-bold sm:text-base">Student & senior discounts</legend>
+                  <p className="text-xs leading-5 text-text-secondary sm:text-sm sm:leading-6">Save 20% on each eligible student or senior citizen’s seat. Other passengers pay the regular fare.</p>
+                  <div className="mt-3 grid grid-cols-2 gap-3 sm:mt-4 sm:gap-4">
+                    <label className="block min-w-0 text-sm font-semibold"><span className="sm:hidden">Students</span><span className="hidden sm:inline">Student passengers (20% off)</span>
+                      <select aria-label="Student passengers (20% off)" value={studentPassengers} onChange={(event) => { setStudentPassengers(Number(event.target.value)); setDiscountIdAcknowledged(false); setReceipt(null); setGcashReference(''); }} className="mt-1.5 min-h-touch w-full rounded-control border border-border-strong bg-white px-3 py-2.5 text-base">
+                        {Array.from({ length: selectedSeats.length - seniorPassengers + 1 }, (_, count) => <option key={count} value={count}>{count}</option>)}
+                      </select>
+                    </label>
+                    <label className="block min-w-0 text-sm font-semibold"><span className="sm:hidden">Seniors</span><span className="hidden sm:inline">Senior citizen passengers (20% off)</span>
+                      <select aria-label="Senior citizen passengers (20% off)" value={seniorPassengers} onChange={(event) => { setSeniorPassengers(Number(event.target.value)); setDiscountIdAcknowledged(false); setReceipt(null); setGcashReference(''); }} className="mt-1.5 min-h-touch w-full rounded-control border border-border-strong bg-white px-3 py-2.5 text-base">
+                        {Array.from({ length: selectedSeats.length - studentPassengers + 1 }, (_, count) => <option key={count} value={count}>{count}</option>)}
+                      </select>
+                    </label>
+                  </div>
+                  <p className="mt-3 text-xs font-semibold text-text-secondary sm:text-sm">Regular passengers: {selectedSeats.length - studentPassengers - seniorPassengers}</p>
+                  {hasDiscount ? <label className="mt-3 flex min-h-touch cursor-pointer items-start gap-3 rounded-control bg-primary-soft p-3 text-sm leading-6">
+                    <input type="checkbox" checked={discountIdAcknowledged} onChange={(event) => setDiscountIdAcknowledged(event.target.checked)} className="mt-1 h-5 w-5 shrink-0 accent-primary" />
+                    <span>I confirm that every discounted passenger will present a valid student or senior citizen ID at the terminal. Eligibility will be checked before boarding.</span>
+                  </label> : null}
+                  {hasDiscount && !priceReady && !currentQuoteError ? <p role="status" className="mt-3 text-sm">Checking the discounted fare…</p> : null}
+                  {currentQuoteError ? <div className="mt-3"><p role="alert" className="text-sm text-danger">{currentQuoteError}</p><Button variant="outline" className="mt-2" onClick={() => setQuoteAttempt((current) => current + 1)}>Retry fare check</Button></div> : null}
+                </fieldset>
+                <fieldset className="mt-5 min-w-0 sm:mt-7">
                   <legend className="text-sm font-bold">Payment method</legend>
-                  <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                  <div className="mt-3 grid grid-cols-2 gap-3">
                     <button
                       type="button"
                       aria-pressed={paymentMethod === 'gcash'}
                       disabled={!trip.gcashRecipient}
                       onClick={() => { setPaymentMethod('gcash'); setError(null); }}
-                      className={cn('rounded-card border p-4 text-left transition', paymentMethod === 'gcash' ? 'border-primary bg-primary-soft ring-2 ring-primary/10' : 'border-border hover:border-primary/50', !trip.gcashRecipient && 'cursor-not-allowed opacity-50')}
+                      className={cn('relative min-w-0 rounded-card border p-3 text-left transition sm:p-4', paymentMethod === 'gcash' ? 'border-primary bg-primary-soft ring-2 ring-primary/10' : 'border-border hover:border-primary/50', !trip.gcashRecipient && 'cursor-not-allowed opacity-50')}
                     >
-                      <Smartphone className="h-6 w-6 text-primary" aria-hidden="true" />
-                      <span className="mt-3 block font-extrabold">GCash</span>
-                      <span className="mt-1 block text-xs leading-5 text-text-secondary">Pay the dispatcher, then upload your receipt for verification.</span>
+                      <Smartphone className="h-5 w-5 text-primary sm:h-6 sm:w-6" aria-hidden="true" />
+                      {paymentMethod === 'gcash' ? <CheckCircle2 className="absolute right-3 top-3 h-4 w-4 text-primary" aria-hidden="true" /> : null}
+                      <span className="mt-2 block text-sm font-extrabold sm:mt-3 sm:text-base">GCash</span>
+                      <span className="mt-1 hidden text-xs leading-5 text-text-secondary sm:block">Pay the dispatcher, then upload your receipt for verification.</span>
                     </button>
                     <button
                       type="button"
                       aria-pressed={paymentMethod === 'paypal'}
                       onClick={() => { setPaymentMethod('paypal'); setError(null); }}
-                      className={cn('rounded-card border p-4 text-left transition', paymentMethod === 'paypal' ? 'border-primary bg-primary-soft ring-2 ring-primary/10' : 'border-border hover:border-primary/50')}
+                      className={cn('relative min-w-0 rounded-card border p-3 text-left transition sm:p-4', paymentMethod === 'paypal' ? 'border-primary bg-primary-soft ring-2 ring-primary/10' : 'border-border hover:border-primary/50')}
                     >
-                      <WalletCards className="h-6 w-6 text-info" aria-hidden="true" />
-                      <span className="mt-3 block font-extrabold">PayPal</span>
-                      <span className="mt-1 block text-xs leading-5 text-text-secondary">Use only the merchant-supplied Pay Now button in the next step.</span>
+                      <WalletCards className="h-5 w-5 text-info sm:h-6 sm:w-6" aria-hidden="true" />
+                      {paymentMethod === 'paypal' ? <CheckCircle2 className="absolute right-3 top-3 h-4 w-4 text-primary" aria-hidden="true" /> : null}
+                      <span className="mt-2 block text-sm font-extrabold sm:mt-3 sm:text-base">PayPal</span>
+                      <span className="mt-1 hidden text-xs leading-5 text-text-secondary sm:block">Pay securely in the next step. Verified payments confirm your reservation automatically.</span>
                     </button>
                   </div>
+                  <p className="mt-2 text-xs leading-5 text-text-secondary sm:hidden">{paymentMethod === 'gcash' ? 'Upload your receipt for dispatcher verification.' : 'Pay securely in the next step. Verified payments confirm your booking automatically.'}</p>
                 </fieldset>
                 {paymentMethod === 'gcash' ? (
-                  <div className="mt-5">
-                    <p className="font-bold text-primary-dark">GCash payment instructions</p>
-                    {trip.gcashRecipient ? (
+                  <div className="mt-4 rounded-control border border-primary/15 bg-primary-soft/40 p-3 sm:mt-5 sm:border-0 sm:bg-transparent sm:p-0">
+                    <p className="text-sm font-bold text-primary-dark sm:text-base">GCash payment instructions</p>
+                    {!priceReady ? <p role="status" className="mt-1 text-sm leading-6 text-text-secondary">Wait for the discounted fare to be confirmed before sending your GCash payment.</p> : trip.gcashRecipient ? (
                       <p className="mt-1 text-sm leading-6 text-text-secondary">
                         Send exactly <strong className="text-text-primary">₱{total.toFixed(2)}</strong> to <strong className="select-all text-text-primary">{trip.gcashRecipient.mobileNumber}</strong> ({trip.gcashRecipient.dispatcherName}, Goa dispatcher), then upload the receipt.
                       </p>
@@ -391,10 +429,10 @@ export function PassengerBookingPage() {
                       <Input label="GCash transaction reference (optional)" maxLength={100} value={gcashReference} onChange={(event) => { setGcashReference(event.target.value); if (error) setError(null); }} placeholder="From your GCash receipt" />
                       <label className="block text-sm font-semibold">
                         Receipt image
-                        <span className="mt-1.5 flex min-h-touch cursor-pointer items-center gap-2 rounded-control border border-dashed border-primary bg-white px-3 text-sm text-primary-dark">
+                        <span className="mt-1.5 flex min-h-[3.25rem] cursor-pointer items-center gap-2 rounded-control border border-dashed border-primary bg-white px-3 text-sm text-primary-dark focus-within:ring-2 focus-within:ring-primary/20">
                           <UploadCloud className="h-4 w-4 shrink-0" aria-hidden="true" />
                           <span className="min-w-0 truncate">{receipt?.name ?? 'Choose JPG, PNG, or WEBP'}</span>
-                          <input type="file" accept="image/jpeg,image/png,image/webp" className="sr-only" onChange={(event) => chooseReceipt(event.target.files?.[0])} />
+                          <input key={`${studentPassengers}-${seniorPassengers}`} type="file" accept="image/jpeg,image/png,image/webp" className="sr-only" onChange={(event) => chooseReceipt(event.target.files?.[0])} />
                         </span>
                         <span className="mt-1.5 block text-xs font-normal text-text-secondary">Maximum file size: 5 MB</span>
                       </label>
@@ -404,16 +442,16 @@ export function PassengerBookingPage() {
                 {error ? <p role="alert" className="mt-4 rounded-control bg-danger-soft p-3 text-sm text-danger">{error}</p> : null}
                 <div className="mt-6 dashboard-form-actions flex flex-col-reverse gap-2 sm:flex-row sm:flex-wrap sm:justify-between">
                   <Button variant="ghost" onClick={() => { setError(null); setStep(2); }} leadingIcon={<ArrowLeft className="h-4 w-4" />}>Back to seats</Button>
-                  <ReservationAction total={total}><Button onClick={continueFromPassenger} trailingIcon={<ArrowRight className="h-4 w-4" />}>Review trip and payment</Button></ReservationAction>
+                  <ReservationAction total={total} caption={hasDiscount && !priceReady ? 'Checking discounted fare' : undefined}><Button disabled={!priceReady || hasDiscount && !discountIdAcknowledged} onClick={continueFromPassenger} trailingIcon={<ArrowRight className="h-4 w-4" />}>Review trip and payment</Button></ReservationAction>
                 </div>
               </Card>
-              <BookingSummary trip={trip} seats={selectedSeats} paymentMethod={paymentMethod} total={total} />
+              <aside className="hidden lg:block"><BookingSummary trip={trip} seats={selectedSeats} paymentMethod={paymentMethod} total={total} discountQuote={discountQuote} /></aside>
             </div>
           ) : null}
 
           {step === 4 && trip ? (
             <div className="mx-auto grid max-w-5xl gap-5 lg:grid-cols-[minmax(0,1fr)_22rem]">
-              <div className="lg:order-2"><BookingSummary trip={trip} seats={selectedSeats} paymentMethod={paymentMethod} total={total} /></div>
+              <div className="lg:order-2"><BookingSummary trip={trip} seats={selectedSeats} paymentMethod={paymentMethod} total={total} discountQuote={discountQuote} /></div>
               <Card className="p-5 sm:p-7 lg:order-1">
                 <p className="text-xs font-bold uppercase tracking-[0.12em] text-primary">Review and payment</p>
                 <h1 className="mt-1 text-3xl font-black">Check before you submit</h1>
@@ -426,8 +464,8 @@ export function PassengerBookingPage() {
                   </div>
                   <div className="rounded-control bg-cream p-4">
                     <p className="text-xs font-semibold text-text-secondary">Payment method</p>
-                    <p className="mt-1 font-bold">{paymentMethod === 'paypal' ? 'PayPal — merchant Pay Now button' : 'GCash — receipt upload'}</p>
-                    <p className="text-sm text-text-secondary">Dispatcher verification required before confirmation</p>
+                    <p className="mt-1 font-bold">{paymentMethod === 'paypal' ? 'PayPal — integrated checkout' : 'GCash — receipt upload'}</p>
+                    <p className="text-sm text-text-secondary">{paymentMethod === 'paypal' ? 'Automatically confirmed after PayPal verifies payment' : 'Dispatcher verification required before confirmation'}</p>
                   </div>
                 </div>
                 {error ? <p role="alert" className="mt-4 rounded-control border border-danger/25 bg-danger-soft p-3 text-sm leading-6 text-danger">{error}</p> : null}
@@ -440,31 +478,14 @@ export function PassengerBookingPage() {
                         <p className="mt-1 text-sm leading-6 text-text-secondary">Pay exactly <strong className="text-text-primary">₱{total.toFixed(2)}</strong>. On PayPal, confirm the currency is PHP and the final total matches before paying.</p>
                       </div>
                     </div>
-                    <p className="my-4 rounded-control bg-warning-soft p-3 text-sm leading-6 text-text-primary">If you already paid, do not pay again. Skip the button and upload your PayPal receipt below.</p>
-                    <PayPalHostedButton />
-                    <form onSubmit={(event) => void confirmPaypalHostedBooking(event)} className="mt-5 space-y-4 border-t border-border pt-5">
-                      <div>
-                        <h3 className="font-bold text-primary-dark">Submit the completed payment</h3>
-                        <p className="mt-1 text-sm leading-6 text-text-secondary">Opening PayPal does not submit a booking. Return here after payment and upload your receipt so the dispatcher can verify it.</p>
-                      </div>
-                      <Input label="PayPal transaction reference (optional)" maxLength={100} value={paypalReference} onChange={(event) => { setPaypalReference(event.target.value); if (error) setError(null); }} placeholder="From your completed PayPal receipt" />
-                      <div>
-                        <label className="block text-sm font-semibold">
-                          PayPal receipt (required)
-                          <span className="mt-1.5 flex min-h-touch cursor-pointer items-center gap-2 rounded-control border border-dashed border-primary bg-white px-3 py-2 text-sm text-primary-dark">
-                            <UploadCloud className="h-4 w-4 shrink-0" aria-hidden="true" />
-                            <span className="min-w-0 break-all">{paypalReceipt?.name ?? 'Choose JPG, PNG, or WEBP'}</span>
-                            <input ref={paypalReceiptInput} type="file" required={!paypalReceipt} aria-required="true" aria-label="PayPal receipt (required)" accept="image/jpeg,image/png,image/webp" disabled={loading} className="sr-only" onChange={(event) => chooseReceipt(event.target.files?.[0], 'paypal')} />
-                          </span>
-                          <span className="mt-1.5 block text-xs font-normal text-text-secondary">Attach your payment screenshot for dispatcher review. Maximum file size: 5 MB.</span>
-                        </label>
-                        {paypalReceipt ? <Button type="button" variant="ghost" size="sm" disabled={loading} className="mt-2" onClick={() => { setPaypalReceipt(null); if (paypalReceiptInput.current) paypalReceiptInput.current.value = ''; setError(null); }}>Remove receipt</Button> : null}
-                      </div>
-                      <div className="dashboard-form-actions flex flex-col-reverse gap-2 sm:flex-row sm:flex-wrap sm:justify-between">
-                        <Button type="button" variant="ghost" onClick={() => { setError(null); setStep(3); }} leadingIcon={<ArrowLeft className="h-4 w-4" />}>Back to details</Button>
-                        <ReservationAction total={total}><Button type="submit" loading={loading} leadingIcon={<ShieldCheck className="h-4 w-4" />}>Submit payment for verification</Button></ReservationAction>
-                      </div>
-                    </form>
+                    <p className="my-4 rounded-control bg-primary-soft p-3 text-sm leading-6 text-text-primary">Your seats are held when checkout starts. After PayPal verifies the completed payment, your reservation is confirmed automatically.</p>
+                    <ReservationAction total={total}>
+                      <PayPalCheckout tripId={trip.id} seats={selectedSeats} contact={contact}
+                        studentPassengers={studentPassengers} seniorPassengers={seniorPassengers} discountIdAcknowledged={discountIdAcknowledged}
+                        onConfirmed={(confirmed) => { setError(null); setBooking(confirmed); setStep(5); }}
+                        onSeatUnavailable={returnToSeatSelection} onBusyChange={setPaypalBusy} />
+                    </ReservationAction>
+                    <Button className="mt-5" variant="ghost" disabled={paypalBusy} onClick={() => { setError(null); setStep(3); }} leadingIcon={<ArrowLeft className="h-4 w-4" />}>Back to details</Button>
                 </section> : null}
                 {paymentMethod === 'gcash' ? (
                   <section className="mt-6 border-t border-border pt-5" aria-labelledby="gcash-submit-heading">
@@ -493,43 +514,57 @@ export function PassengerBookingPage() {
           ) : null}
 
           {step === 5 ? (
-            <div className="mx-auto max-w-2xl">
+            <div className="mx-auto min-w-0 max-w-2xl">
               {loading ? <Card className="p-7"><LoadingSkeleton lines={5} /></Card> : null}
               {!loading && booking ? (
-                <Card className="overflow-hidden">
-                  <div className={cn('p-6 text-white sm:p-8', booking.status === 'confirmed' ? 'bg-primary' : ['rejected', 'failed'].includes(booking.payment?.status ?? '') ? 'bg-danger' : 'bg-warning')}>
-                    {booking.status === 'confirmed' ? <CheckCircle2 className="h-12 w-12" aria-hidden="true" /> : ['rejected', 'failed'].includes(booking.payment?.status ?? '') ? <CircleX className="h-12 w-12" aria-hidden="true" /> : <Clock3 className="h-12 w-12" aria-hidden="true" />}
-                    <p className="mt-4 text-sm font-bold uppercase tracking-[0.12em] text-white/80">{booking.status === 'confirmed' ? 'Seat reserved' : ['rejected', 'failed'].includes(booking.payment?.status ?? '') ? 'Payment unsuccessful' : 'Payment report received'}</p>
-                    <h1 className="mt-1 text-3xl font-black text-white">{booking.status === 'confirmed' ? 'Your Goa ride is confirmed!' : ['rejected', 'failed'].includes(booking.payment?.status ?? '') ? 'Your payment was not completed' : 'Payment verification pending'}</h1>
+                <Card padded={false} className="min-w-0 overflow-hidden">
+                  <div className={cn('flex items-start gap-3 p-4 sm:block sm:p-8', booking.status === 'confirmed' ? 'bg-primary text-white' : ['rejected', 'failed'].includes(booking.payment?.status ?? '') ? 'bg-danger text-white' : 'bg-warning-soft text-[#854D0E]')}>
+                    {booking.status === 'confirmed' ? <CheckCircle2 className="h-9 w-9 shrink-0 sm:h-12 sm:w-12" aria-hidden="true" /> : ['rejected', 'failed'].includes(booking.payment?.status ?? '') ? <CircleX className="h-9 w-9 shrink-0 sm:h-12 sm:w-12" aria-hidden="true" /> : <Clock3 className="h-9 w-9 shrink-0 sm:h-12 sm:w-12" aria-hidden="true" />}
+                    <div className="min-w-0">
+                      <p className="text-[0.65rem] font-bold uppercase tracking-[0.1em] opacity-90 sm:mt-4 sm:text-sm">{booking.status === 'confirmed' ? 'Seat reserved' : ['rejected', 'failed'].includes(booking.payment?.status ?? '') ? 'Payment unsuccessful' : 'Payment report received'}</p>
+                      <h1 className="mt-1 text-xl font-black leading-tight text-inherit sm:text-3xl">{booking.status === 'confirmed' ? 'Your Goa ride is confirmed!' : ['rejected', 'failed'].includes(booking.payment?.status ?? '') ? 'Your payment was not completed' : 'Payment verification pending'}</h1>
+                    </div>
                   </div>
-                  <div className="p-6 sm:p-8">
-                    <div className="rounded-card border-2 border-primary/25 bg-success-soft p-4 sm:p-5">
-                      <p className="text-sm font-bold text-primary-dark">Reservation reference</p>
-                      <p className="mt-1 break-all text-2xl font-black tracking-wide text-primary-dark">{booking.reference}</p>
-                      <p className="mt-2 flex items-start gap-2 text-sm leading-6 text-text-primary">
+                  <div className="space-y-4 p-4 sm:space-y-5 sm:p-8">
+                    <div className="rounded-control border border-primary/25 bg-primary-soft p-3 sm:p-5">
+                      <p className="text-xs font-bold text-primary-dark sm:text-sm">Reservation reference</p>
+                      <p className="mt-1 select-all break-all text-lg font-black tracking-wide text-primary-dark sm:text-2xl">{booking.reference}</p>
+                      <p className="mt-2 flex items-start gap-2 text-xs leading-5 text-text-primary sm:text-sm sm:leading-6">
                         <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
-                        Save or screenshot this reference. Bring a valid ID matching the passenger name and present both at the terminal for reservation verification.
+                        Save this reference. Present it with a valid ID matching the passenger name at the terminal.
                       </p>
                     </div>
-                    <div className="mt-6 grid gap-4 rounded-card bg-cream p-4 sm:grid-cols-2">
-                      <div className="sm:col-span-2">
-                        <p className="text-xs text-text-secondary">Travel date</p>
-                        <p className="mt-1 font-bold">{formatTripDate(booking.departureTime)}</p>
-                        <div className="mt-2 grid grid-cols-2 gap-4">
-                          <div><p className="text-xs text-text-secondary">Loading time</p><p className="font-bold">{formatTripTime(booking.boardingStartTime)}</p></div>
-                          <div><p className="text-xs text-text-secondary">Departure time</p><p className="font-bold">{formatTripTime(booking.departureTime)}</p></div>
-                        </div>
+                    <div className="rounded-control border border-border p-3 sm:p-4">
+                      <div className="flex items-start gap-2">
+                        <CalendarDays className="mt-0.5 h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
+                        <div><p className="text-xs text-text-secondary">Travel date</p><p className="mt-0.5 text-sm font-bold sm:text-base">{formatTripDate(booking.departureTime)}</p></div>
                       </div>
-                      <div><p className="text-xs text-text-secondary">Selected seats</p><p className="mt-1 font-bold">{booking.seats.map((seat) => `#${seat}`).join(', ')}</p></div>
-                      <div><p className="text-xs text-text-secondary">Payment status</p><p className="mt-1 font-bold">{paymentStatusLabel(booking.payment?.status)}</p></div>
-                      {booking.payment?.method === 'gcash' && booking.gcashRecipient ? <div className="sm:col-span-2"><p className="text-xs text-text-secondary">GCash paid to</p><p className="mt-1 select-all font-bold">{booking.gcashRecipient.mobileNumber}</p><p className="text-sm text-text-secondary">{booking.gcashRecipient.dispatcherName} · Goa dispatcher</p></div> : null}
-                      <div className="sm:col-span-2"><p className="text-xs text-text-secondary">Payment transaction ID/reference</p><p className="mt-1 break-all font-bold">{booking.payment?.transactionReference ?? 'Not supplied'}</p></div>
-                      <div className="sm:col-span-2"><p className="text-xs text-text-secondary">Reschedule</p><p className="mt-1 font-bold">{booking.canReschedule ? 'Eligible' : booking.rescheduleMessage}</p></div>
+                      <dl className="mt-3 grid grid-cols-2 gap-3 rounded-control bg-cream p-3 text-sm">
+                        <div><dt className="text-xs text-text-secondary">Loading time</dt><dd className="mt-0.5 font-bold">{formatTripTime(booking.boardingStartTime)}</dd></div>
+                        <div><dt className="text-xs text-text-secondary">Departure time</dt><dd className="mt-0.5 font-bold">{formatTripTime(booking.departureTime)}</dd></div>
+                      </dl>
+                      <p className="mt-3 text-xs text-text-secondary">Selected seats</p>
+                      <div className="mt-1.5 flex flex-wrap gap-1.5">{booking.seats.length ? booking.seats.map((seat) => <span key={seat} className="rounded-lg border border-primary/20 bg-primary-soft px-2.5 py-1 text-sm font-bold text-primary-dark">Seat #{seat}</span>) : <p className="text-sm text-text-secondary">No seats currently reserved</p>}</div>
                     </div>
-                    <div className="mt-5 rounded-control border border-primary/20 bg-primary-soft p-4"><p className="text-sm font-bold text-primary-dark">Total Price</p><p className="mt-1 text-xl font-bold text-primary-dark">₱{booking.totalAmount.toFixed(2)}</p></div>
-                    {booking.payment?.status === 'pending_verification' ? <p className="mt-4 rounded-control bg-warning-soft p-3 text-sm leading-6 text-text-primary">Your selected seats are being held while a dispatcher verifies the payment. You do not need to submit or pay again. Check My Bookings for updates.</p> : null}
-                    {booking.payment?.status === 'rejected' ? <p role="alert" className="mt-4 rounded-control bg-danger-soft p-3 text-sm text-danger">Reason: {booking.payment.rejectionReason ?? 'The dispatcher rejected the payment report. Check your notifications for details.'}</p> : null}
-                    <Link to="/passenger/bookings" className="mt-6 flex min-h-touch w-full items-center justify-center rounded-control bg-primary px-4 text-sm font-bold text-white">My Bookings</Link>
+                    <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 rounded-control bg-cream p-3 sm:p-4">
+                      <div className="min-w-0"><p className="text-xs text-text-secondary">Payment status</p><p className="mt-1 text-sm font-bold">{paymentStatusLabel(booking.payment?.status)}</p></div>
+                      <div className="text-right text-primary-dark"><p className="text-xs font-semibold">Total Price</p><p className="mt-1 text-lg font-black sm:text-xl">₱{booking.totalAmount.toFixed(2)}</p></div>
+                    </div>
+                    {(booking.discountAmount ?? 0) > 0 ? <div className="rounded-control bg-cream p-3 text-xs leading-5 sm:p-4 sm:text-sm"><p className="font-bold">20% passenger discount: −₱{booking.discountAmount!.toFixed(2)}</p><p className="mt-1">{booking.studentPassengers} student(s) · {booking.seniorPassengers} senior citizen(s)</p><p className="mt-2">Bring valid student/senior IDs for all discounted passengers. Eligibility is checked at the terminal.</p></div> : null}
+                    {booking.payment?.status === 'pending_verification' ? <p role="status" className="rounded-control bg-warning-soft p-3 text-xs leading-5 text-text-primary sm:text-sm sm:leading-6">Your seats are held while the dispatcher verifies payment. No need to submit or pay again. Check My Bookings for updates.</p> : null}
+                    {booking.payment?.status === 'rejected' ? <p role="alert" className="rounded-control bg-danger-soft p-3 text-sm text-danger">Reason: {booking.payment.rejectionReason ?? 'The dispatcher rejected the payment report. Check your notifications for details.'}</p> : null}
+                    <Link to="/passenger/bookings" className="flex min-h-touch w-full items-center justify-center gap-2 rounded-control bg-primary px-4 py-3 text-sm font-bold text-white">My Bookings<ArrowRight className="h-4 w-4" aria-hidden="true" /></Link>
+                    <div className="border-t border-border pt-1 sm:pt-4">
+                      <button type="button" aria-expanded={confirmationDetailsExpanded} aria-controls="reservation-confirmation-details" onClick={() => setConfirmationDetailsExpanded((expanded) => !expanded)} className="flex min-h-touch w-full items-center justify-between gap-3 text-left text-sm font-bold text-primary sm:hidden">
+                        {confirmationDetailsExpanded ? 'Hide payment & booking details' : 'View payment & booking details'}
+                        <ChevronDown className={cn('h-4 w-4 shrink-0 transition-transform', confirmationDetailsExpanded && 'rotate-180')} aria-hidden="true" />
+                      </button>
+                      <dl id="reservation-confirmation-details" className={cn('gap-4 text-sm sm:grid sm:grid-cols-2', confirmationDetailsExpanded ? 'grid pt-3 sm:pt-0' : 'hidden')}>
+                        {booking.payment?.method === 'gcash' && booking.gcashRecipient ? <div className="sm:col-span-2"><dt className="text-xs text-text-secondary">GCash paid to</dt><dd className="mt-1 select-all font-bold">{booking.gcashRecipient.mobileNumber}</dd><dd className="text-text-secondary">{booking.gcashRecipient.dispatcherName} · Goa dispatcher</dd></div> : null}
+                        <div className="sm:col-span-2"><dt className="text-xs text-text-secondary">Payment transaction ID/reference</dt><dd className="mt-1 break-all font-bold">{booking.payment?.transactionReference ?? 'Not supplied'}</dd></div>
+                        <div className="sm:col-span-2"><dt className="text-xs text-text-secondary">Reschedule</dt><dd className="mt-1 font-bold">{booking.canReschedule ? 'Eligible' : booking.rescheduleMessage}</dd></div>
+                      </dl>
+                    </div>
                   </div>
                 </Card>
               ) : null}

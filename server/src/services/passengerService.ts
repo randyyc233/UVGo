@@ -10,12 +10,13 @@ import {
 } from '@prisma/client';
 import { randomBytes } from 'node:crypto';
 import { compare, hash } from 'bcryptjs';
-import { boardingStartFor } from '../config/dispatch.js';
+import { boardingStartFor, MAX_PASSENGER_RESCHEDULES, reservationCutoffFor } from '../config/dispatch.js';
 import { passengerCapacityOf } from '../config/vehicle.js';
 import { prisma } from '../lib/prisma.js';
 import { AppError } from '../utils/AppError.js';
 import { toAuthenticatedUser } from './authService.js';
-import { capturePayPalOrder, createPayPalOrder } from './paypalService.js';
+import { capturePayPalOrder, createPayPalOrder, getPayPalOrderState } from './paypalService.js';
+import { calculateReservationFare, type PassengerDiscountInput } from './reservationFare.js';
 
 const activeReservationStatuses: ReservationStatus[] = [
   ReservationStatus.PENDING_PAYMENT,
@@ -78,10 +79,13 @@ async function activeRouteDispatcher(route: RouteCode) {
   });
 }
 
-function assertBookableTrip(trip: { route: RouteCode; status: TripStatus; scheduledOrTriggeredTime: Date }) {
+function assertBookableTrip(trip: { route: RouteCode; status: TripStatus; scheduledOrTriggeredTime: Date; boardingStartTime: Date | null }) {
   if (trip.route !== RouteCode.GOA) throw new AppError(422, 'GOA_ONLY', 'Only Goa trips can be reserved.');
   if (!bookableTripStatuses.includes(trip.status) || trip.scheduledOrTriggeredTime <= new Date()) {
     throw new AppError(409, 'TRIP_CLOSED', 'This trip is no longer open for reservations. Choose another departure.');
+  }
+  if (reservationCutoffFor(trip.scheduledOrTriggeredTime, trip.boardingStartTime) <= new Date()) {
+    throw new AppError(409, 'TRIP_CLOSED', 'Reservations close 5 hours before loading time. Choose another departure.');
   }
 }
 
@@ -125,7 +129,11 @@ export async function searchGoaTrips(date: string | undefined, passengers: numbe
     activeRouteDispatcher(RouteCode.GOA),
   ]);
 
-  return trips.map((trip) => {
+  const now = new Date();
+  return trips.filter((trip) => (
+    trip.scheduledOrTriggeredTime > now
+    && reservationCutoffFor(trip.scheduledOrTriggeredTime, trip.boardingStartTime) > now
+  )).map((trip) => {
     const capacity = passengerCapacityOf(trip.vehicle);
     const reservedSeatCount = trip.reservedSeats.filter((seat) => seat.seatNumber >= 1 && seat.seatNumber <= capacity).length;
     return {
@@ -134,6 +142,7 @@ export async function searchGoaTrips(date: string | undefined, passengers: numbe
       origin: 'Naga City East Bound Terminal',
       destination: 'Goa Terminal',
       boardingStartTime: boardingStartFor(trip.scheduledOrTriggeredTime, trip.boardingStartTime).toISOString(),
+      reservationCutoffTime: reservationCutoffFor(trip.scheduledOrTriggeredTime, trip.boardingStartTime).toISOString(),
       departureTime: trip.scheduledOrTriggeredTime.toISOString(),
       fare: Number(trip.fareAmount),
       vanId: trip.vehicle.vanId,
@@ -183,6 +192,7 @@ export async function getTripSeats(tripId: string) {
       origin: 'Naga City East Bound Terminal',
       destination: 'Goa Terminal',
       boardingStartTime: boardingStartFor(trip.scheduledOrTriggeredTime, trip.boardingStartTime).toISOString(),
+      reservationCutoffTime: reservationCutoffFor(trip.scheduledOrTriggeredTime, trip.boardingStartTime).toISOString(),
       departureTime: trip.scheduledOrTriggeredTime.toISOString(),
       fare: Number(trip.fareAmount),
       vanId: trip.vehicle.vanId,
@@ -201,11 +211,19 @@ export async function getTripSeats(tripId: string) {
   };
 }
 
-interface ReservationInput {
+interface ReservationInput extends PassengerDiscountInput {
   passengerId: string;
   tripId: string;
   seats: number[];
   contact: string;
+}
+
+export async function quoteReservationFare(input: Omit<ReservationInput, 'passengerId' | 'contact'>) {
+  const trip = await prisma.trip.findUnique({ where: { id: input.tripId }, include: { vehicle: true } });
+  if (!trip) throw new AppError(404, 'TRIP_NOT_FOUND', 'This Goa trip is no longer available.');
+  assertBookableTrip(trip);
+  if (input.seats.some((seat) => seat < 1 || seat > passengerCapacityOf(trip.vehicle))) throw new AppError(422, 'INVALID_SEAT', 'Choose valid passenger seats.');
+  return calculateReservationFare(trip.fareAmount, input.seats.length, { ...input, discountIdAcknowledged: true });
 }
 
 function normalizeReservationConflict(error: unknown): never {
@@ -248,9 +266,10 @@ async function createReservationRecord(
   });
   if (occupied.length) throw new AppError(409, 'SEAT_UNAVAILABLE', `Seat ${occupied.map((seat) => seat.seatNumber).join(', ')} was just reserved. Please choose another.`);
 
-  const fareAmount = Number(trip.fareAmount) * input.seats.length;
+  const fare = calculateReservationFare(trip.fareAmount, input.seats.length, input);
+  const fareAmount = fare.subtotal;
   // The fare is the full per-seat price; there is no separate service fee.
-  const totalAmount = fareAmount;
+  const totalAmount = fare.totalAmount;
   const reference = bookingReference();
   await transaction.user.update({ where: { id: input.passengerId }, data: { contact: input.contact } });
   const reservation = await transaction.reservation.create({
@@ -260,6 +279,9 @@ async function createReservationRecord(
       tripId: trip.id,
       seatCount: input.seats.length,
       fareAmount,
+      studentPassengers: fare.studentPassengers,
+      seniorPassengers: fare.seniorPassengers,
+      discountAmount: fare.discountAmount,
       status: reservationStatus,
       seats: { create: input.seats.map((seatNumber) => ({ tripId: trip.id, seatNumber })) },
       payments: {
@@ -372,46 +394,64 @@ export async function createPaypalReservation(input: ReservationInput) {
   }
 }
 
+async function confirmCapturedPaypal(
+  transaction: Prisma.TransactionClient, paymentId: string, reservationId: string,
+  passengerId: string, reference: string, captureId: string | null,
+) {
+  const updated = await transaction.payment.updateMany({
+    where: { id: paymentId, status: PaymentStatus.PENDING },
+    data: { status: PaymentStatus.CAPTURED, paidAt: new Date(), ...(captureId ? { externalReferenceKey: externalPaymentReferenceKey(PaymentMethod.PAYPAL, captureId) } : {}) },
+  });
+  if (!updated.count) return;
+  await transaction.reservation.update({ where: { id: reservationId }, data: { status: ReservationStatus.CONFIRMED } });
+  await transaction.notification.create({ data: { userId: passengerId, type: NotificationType.BOOKING, message: `Your Goa booking ${reference} is confirmed. Bring a valid ID and your reservation reference to the terminal.` } });
+}
+
 export async function capturePaypalReservation(passengerId: string, reference: string) {
   const reservation = await prisma.reservation.findFirst({
-    where: { reference, passengerId },
-    include: { payments: { where: { method: PaymentMethod.PAYPAL }, take: 1 } },
+    where: { reference, passengerId }, include: { payments: { where: { method: PaymentMethod.PAYPAL }, take: 1 } },
   });
   const payment = reservation?.payments[0];
   if (!reservation || !payment?.paypalOrderId) throw new AppError(404, 'BOOKING_NOT_FOUND', 'PayPal booking was not found.');
   if (payment.status === PaymentStatus.CAPTURED) return getPassengerBooking(passengerId, reference);
 
-  const captured = await capturePayPalOrder(payment.paypalOrderId);
-  if (!captured.completed) throw new AppError(409, 'PAYPAL_NOT_COMPLETED', 'PayPal has not completed this payment.');
-  await prisma.$transaction([
-    prisma.payment.update({ where: { id: payment.id }, data: { status: PaymentStatus.CAPTURED, paidAt: new Date() } }),
-    prisma.reservation.update({ where: { id: reservation.id }, data: { status: ReservationStatus.CONFIRMED } }),
-    prisma.notification.create({ data: { userId: passengerId, type: NotificationType.BOOKING, message: `Your Goa booking ${reference} is confirmed. Bring a valid ID and your reservation reference to the terminal.` } }),
-  ]);
+  await prisma.$transaction(async (transaction) => {
+    // Capture and cancellation share the payment row lock, including the provider call.
+    await transaction.$queryRaw`SELECT id FROM Payment WHERE id = ${payment.id} FOR UPDATE`;
+    const current = await transaction.payment.findUnique({ where: { id: payment.id }, include: { reservation: true } });
+    if (!current) throw new AppError(404, 'BOOKING_NOT_FOUND', 'PayPal booking was not found.');
+    if (current.status === PaymentStatus.CAPTURED) return;
+    if (current.status !== PaymentStatus.PENDING || current.reservation.status !== ReservationStatus.PENDING_PAYMENT) {
+      throw new AppError(409, 'PAYPAL_BOOKING_NOT_PENDING', 'This reservation is not awaiting a PayPal payment.');
+    }
+    const captured = await capturePayPalOrder(current.paypalOrderId!, { reference, amount: Number(current.amount) });
+    if (!captured.completed) throw new AppError(409, 'PAYPAL_NOT_COMPLETED', 'PayPal has not completed this payment. Check again after approval; do not pay again if a payment is pending.');
+    await confirmCapturedPaypal(transaction, current.id, reservation.id, passengerId, reference, captured.captureId);
+  }, { maxWait: 10_000, timeout: 90_000 });
   return getPassengerBooking(passengerId, reference);
 }
 
-/**
- * Releases the seat hold created for an abandoned PayPal checkout. When the
- * passenger closes the PayPal window nothing was paid, so the held seats must go
- * back to the pool — otherwise a single cancelled attempt would block those seats
- * permanently, because PENDING_PAYMENT counts as an active reservation.
- *
- * Deliberately refuses to act unless the payment is still PENDING, so a capture
- * that wins the race against onCancel can never have its booking deleted.
- */
+/** Release only a verified unpaid checkout. Recover completed payments instead of deleting them. */
 export async function releasePaypalReservation(passengerId: string, reference: string) {
   const reservation = await prisma.reservation.findFirst({
-    where: { reference, passengerId },
-    include: { payments: { where: { method: PaymentMethod.PAYPAL }, take: 1 } },
+    where: { reference, passengerId }, include: { payments: { where: { method: PaymentMethod.PAYPAL }, take: 1 } },
   });
   const payment = reservation?.payments[0];
-  const isUnpaidHold =
-    reservation?.status === ReservationStatus.PENDING_PAYMENT && payment?.status === PaymentStatus.PENDING;
-  if (!reservation || !isUnpaidHold) return { released: false };
-
-  await prisma.reservation.delete({ where: { id: reservation.id } });
-  return { released: true };
+  if (!reservation || !payment?.paypalOrderId) return { released: false };
+  const released = await prisma.$transaction(async (transaction) => {
+    await transaction.$queryRaw`SELECT id FROM Payment WHERE id = ${payment.id} FOR UPDATE`;
+    const current = await transaction.payment.findUnique({ where: { id: payment.id }, include: { reservation: true } });
+    if (!current || current.status !== PaymentStatus.PENDING || current.reservation.status !== ReservationStatus.PENDING_PAYMENT) return false;
+    const state = await getPayPalOrderState(current.paypalOrderId!, { reference, amount: Number(current.amount) });
+    if (state.status === 'completed') {
+      await confirmCapturedPaypal(transaction, current.id, reservation.id, passengerId, reference, state.captureId);
+      return false;
+    }
+    if (state.status !== 'unpaid') return false;
+    await transaction.reservation.delete({ where: { id: reservation.id } });
+    return true;
+  }, { maxWait: 10_000, timeout: 60_000 });
+  return { released, ...(!released ? { booking: await getPassengerBooking(passengerId, reference) } : {}) };
 }
 
 const bookingInclude = {
@@ -435,7 +475,9 @@ function serializeBooking(
   routeDispatcher?: DispatcherPaymentCandidate | null,
 ) {
   const payment = booking.payments[0] ?? null;
-  const hoursUntilDeparture = (booking.trip.scheduledOrTriggeredTime.getTime() - Date.now()) / 3_600_000;
+  const rescheduleCutoffTime = reservationCutoffFor(booking.trip.scheduledOrTriggeredTime, booking.trip.boardingStartTime);
+  const rescheduleWindowOpen = Date.now() < rescheduleCutoffTime.getTime();
+  const reschedulesRemaining = Math.max(0, MAX_PASSENGER_RESCHEDULES - booking.rescheduleCount);
   const reschedulableStatus = reschedulableReservationStatuses.includes(booking.status);
   return {
     id: booking.id,
@@ -450,6 +492,9 @@ function serializeBooking(
     seats: booking.seats.map((seat) => seat.seatNumber),
     seatCount: booking.seatCount,
     fareAmount: Number(booking.fareAmount),
+    studentPassengers: booking.studentPassengers,
+    seniorPassengers: booking.seniorPassengers,
+    discountAmount: Number(booking.discountAmount),
     totalAmount: payment ? Number(payment.amount) : Number(booking.fareAmount),
     status: booking.status.toLowerCase(),
     payment: payment ? {
@@ -459,7 +504,8 @@ function serializeBooking(
           ? 'gcash'
           : 'legacy',
       status: payment.status.toLowerCase(),
-      transactionReference: payment.paypalOrderId
+      transactionReference: (payment.method === PaymentMethod.PAYPAL && payment.status === PaymentStatus.CAPTURED ? payment.externalReferenceKey?.replace(/^PAYPAL:/, '') : null)
+        ?? payment.paypalOrderId
         ?? payment.gcashReference
         ?? (payment.method === PaymentMethod.LEGACY ? payment.externalReferenceKey?.replace(/^LEGACY:/, '') : null),
       gcashReference: payment.gcashReference,
@@ -471,12 +517,18 @@ function serializeBooking(
       booking.trip.vehicle.managedByDispatcher,
       routeDispatcher,
     ),
-    canReschedule: hoursUntilDeparture >= 24 && reschedulableStatus,
+    rescheduleCutoffTime: rescheduleCutoffTime.toISOString(),
+    rescheduleCount: booking.rescheduleCount,
+    rescheduleLimit: MAX_PASSENGER_RESCHEDULES,
+    reschedulesRemaining,
+    canReschedule: rescheduleWindowOpen && reschedulableStatus && reschedulesRemaining > 0,
     rescheduleMessage: !reschedulableStatus
       ? 'Payment must be confirmed before this booking can be rescheduled.'
-      : hoursUntilDeparture >= 24
-        ? 'Eligible to reschedule.'
-        : 'Rescheduling closes 24 hours before departure.',
+      : reschedulesRemaining === 0
+        ? 'The limit of 3 reschedules for this reservation has been reached.'
+        : rescheduleWindowOpen
+          ? 'Reschedule before the cutoff, up to 3 times per reservation.'
+          : 'Rescheduling closes 5 hours before loading time.',
     createdAt: booking.createdAt.toISOString(),
   };
 }
@@ -501,19 +553,29 @@ export async function getPassengerBooking(passengerId: string, reference: string
 export async function reschedulePassengerBooking(passengerId: string, reference: string, tripId: string, seats: number[]) {
   try {
     await prisma.$transaction(async (transaction) => {
-      const booking = await transaction.reservation.findFirst({ where: { passengerId, reference }, include: { trip: true } });
+      // Serialize requests for this passenger's booking before reading its count,
+      // current trip, or seats, so concurrent tabs cannot exceed the limit.
+      await transaction.$queryRaw`SELECT id FROM Reservation WHERE reference = ${reference} AND passengerId = ${passengerId} FOR UPDATE`;
+      const booking = await transaction.reservation.findFirst({ where: { passengerId, reference }, include: { trip: true, seats: true } });
       if (!booking) throw new AppError(404, 'BOOKING_NOT_FOUND', 'This booking could not be found.');
       if (!reschedulableReservationStatuses.includes(booking.status)) {
         throw new AppError(409, 'BOOKING_NOT_RESCHEDULABLE', 'Only a confirmed booking can be rescheduled.');
       }
-      if (booking.trip.scheduledOrTriggeredTime.getTime() - Date.now() < 86_400_000) {
-        throw new AppError(409, 'RESCHEDULE_WINDOW_CLOSED', 'Rescheduling closes 24 hours before departure.');
+      if (booking.rescheduleCount >= MAX_PASSENGER_RESCHEDULES) {
+        throw new AppError(409, 'RESCHEDULE_LIMIT_REACHED', 'The limit of 3 reschedules for this reservation has been reached.');
+      }
+      if (reservationCutoffFor(booking.trip.scheduledOrTriggeredTime, booking.trip.boardingStartTime).getTime() <= Date.now()) {
+        throw new AppError(409, 'RESCHEDULE_WINDOW_CLOSED', 'Rescheduling closes 5 hours before loading time.');
       }
       if (seats.length !== booking.seatCount) throw new AppError(422, 'SEAT_COUNT_MISMATCH', `Choose exactly ${booking.seatCount} seat(s).`);
+      if (tripId === booking.tripId && booking.seats.every((seat) => seats.includes(seat.seatNumber))) {
+        throw new AppError(409, 'RESCHEDULE_UNCHANGED', 'Choose a different trip or seats to reschedule this booking.');
+      }
       const target = await transaction.trip.findUnique({ where: { id: tripId }, include: { vehicle: true } });
       if (!target || target.route !== RouteCode.GOA || !bookableTripStatuses.includes(target.status) || target.scheduledOrTriggeredTime <= new Date()) {
         throw new AppError(422, 'INVALID_RESCHEDULE_TRIP', 'Choose an open future Goa trip.');
       }
+      assertBookableTrip(target);
       const capacity = passengerCapacityOf(target.vehicle);
       if (seats.some((seat) => seat < 1 || seat > capacity)) throw new AppError(422, 'INVALID_SEAT', `Choose a seat from 1 to ${capacity}.`);
       const occupied = await transaction.reservationSeat.findMany({
@@ -531,6 +593,7 @@ export async function reschedulePassengerBooking(passengerId: string, reference:
         data: {
           tripId,
           status: ReservationStatus.RESCHEDULED,
+          rescheduleCount: { increment: 1 },
           seats: { create: seats.map((seatNumber) => ({ tripId, seatNumber })) },
         },
       });

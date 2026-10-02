@@ -1,10 +1,10 @@
-import { useMemo, useState, type FormEvent } from 'react';
-import { CheckCircle2, Eye, EyeOff, LockKeyhole, Mail, MapPin, Phone, Save, ShieldCheck, UserRound } from 'lucide-react';
+import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import { CheckCircle2, Coins, Eye, EyeOff, LockKeyhole, Mail, MapPin, Phone, Save, ShieldCheck, UserRound } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { apiRequest, ApiError } from '../../api/http';
 import { useAuth } from '../../auth/authContext';
 import type { AuthUser } from '../../auth/authTypes';
-import { Button, Card, Input, useToast } from '../../components/ui';
+import { Button, Card, Input, LoadingSkeleton, useToast } from '../../components/ui';
 import { DispatcherAccountsPage } from './DispatcherManagementPages';
 
 type AccountErrors = { name?: string; email?: string; contact?: string };
@@ -19,6 +19,73 @@ function validationDetails(error: ApiError) {
 function firstDetail(details: Record<string, unknown> | null, field: string) {
   const messages = details?.[field];
   return Array.isArray(messages) && typeof messages[0] === 'string' ? messages[0] : undefined;
+}
+
+function PublicGoaFareSettings() {
+  const [fare, setFare] = useState('');
+  const [savedFare, setSavedFare] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [loadAttempt, setLoadAttempt] = useState(0);
+  const toast = useToast();
+
+  useEffect(() => {
+    let active = true;
+    apiRequest<{ publicFare: { fareAmount: number } }>('/dispatcher/profile/public-fare')
+      .then(({ publicFare }) => {
+        if (!active) return;
+        setSavedFare(publicFare.fareAmount);
+        setFare(publicFare.fareAmount.toFixed(2));
+        setError(null);
+      })
+      .catch((caught) => {
+        if (active) setError(caught instanceof ApiError ? caught.message : 'The public fare could not be loaded.');
+      })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, [loadAttempt]);
+
+  const changed = savedFare !== null && Number(fare) !== savedFare;
+
+  async function saveFare(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const amount = Number(fare);
+    if (!/^\d+(\.\d{1,2})?$/.test(fare) || amount < 0.01 || amount > 10_000) {
+      setError('Enter a fare from ₱0.01 to ₱10,000 with no more than two decimal places.');
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    try {
+      const { publicFare } = await apiRequest<{ publicFare: { fareAmount: number } }>('/dispatcher/profile/public-fare', {
+        method: 'PATCH', body: JSON.stringify({ fareAmount: amount }),
+      });
+      setSavedFare(publicFare.fareAmount);
+      setFare(publicFare.fareAmount.toFixed(2));
+      window.dispatchEvent(new Event('uvgo:public-route-fare-changed'));
+      toast.success('Public Goa fare updated.');
+    } catch (caught) {
+      setError(caught instanceof ApiError ? firstDetail(validationDetails(caught), 'fareAmount') ?? caught.message : 'The public fare could not be saved.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Card className="p-5 sm:p-6">
+      <div className="flex items-start gap-3"><span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary-soft text-primary"><Coins className="h-5 w-5" /></span><div><h2 className="text-lg font-extrabold">Public Goa fare</h2><p className="mt-1 text-sm text-text-secondary">Set the fare shown on the public Goa route card. Departure fares are managed in Schedules.</p></div></div>
+      {loading ? <div className="mt-5"><LoadingSkeleton lines={2} /></div> : (
+        <form className="mt-5 space-y-4" onSubmit={saveFare} noValidate>
+          {savedFare !== null ? <Input label="Public fare per passenger (₱)" type="number" min="0.01" max="10000" step="0.01" inputMode="decimal" value={fare} disabled={saving} onChange={(event) => { setFare(event.target.value); setError(null); }} hint="Shared by all Goa dispatchers and displayed on the public homepage." /> : null}
+          {error ? <p role="alert" className="rounded-control bg-danger-soft p-3 text-sm font-semibold text-danger">{error}</p> : null}
+          <div className="dashboard-form-actions flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+            {savedFare !== null ? <><Button type="button" variant="ghost" disabled={!changed || saving} onClick={() => { setFare(savedFare.toFixed(2)); setError(null); }}>Discard changes</Button><Button type="submit" loading={saving} disabled={!changed} leadingIcon={<Save className="h-4 w-4" />}>Save public fare</Button></> : <Button type="button" variant="outline" onClick={() => { setLoading(true); setLoadAttempt((attempt) => attempt + 1); }}>Retry</Button>}
+          </div>
+        </form>
+      )}
+    </Card>
+  );
 }
 
 export function DispatcherProfilePage() {
@@ -178,6 +245,8 @@ export function DispatcherProfilePage() {
           </form>
         </Card>
       </div>
+
+      {user.dispatcherRoute === 'goa' ? <PublicGoaFareSettings key={user.id} /> : null}
 
       <Card className="p-5 sm:p-6">
         <DispatcherAccountsPage />

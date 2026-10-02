@@ -9,6 +9,7 @@ import {
   paypalReservationSchema,
   rescheduleSchema,
   tripSearchSchema,
+  reservationQuoteSchema,
 } from '../validators/passengerValidators.js';
 import {
   capturePaypalReservation,
@@ -26,9 +27,11 @@ import {
   markPassengerNotificationRead,
   reschedulePassengerBooking,
   searchGoaTrips,
+  quoteReservationFare,
   updatePassengerProfile,
 } from '../services/passengerService.js';
 import { SESSION_COOKIE } from '../middleware/authMiddleware.js';
+import { getPayPalCheckoutConfig } from '../services/paypalService.js';
 
 function routeParameter(value: unknown) {
   if (typeof value !== 'string') throw new AppError(400, 'INVALID_ROUTE_PARAMETER', 'The requested resource identifier is invalid.');
@@ -44,20 +47,33 @@ export async function tripSeats(request: Request, response: Response) {
   response.status(200).json(await getTripSeats(routeParameter(request.params.tripId)));
 }
 
+export async function reservationQuote(request: Request, response: Response) {
+  response.setHeader('Cache-Control', 'no-store');
+  response.status(200).json({ quote: await quoteReservationFare(reservationQuoteSchema.parse(request.body)) });
+}
+
 export async function createPaypal(request: Request, response: Response) {
+  getPayPalCheckoutConfig();
   const input = paypalReservationSchema.parse(request.body);
   const order = await createPaypalReservation({ ...input, passengerId: request.auth!.userId });
   response.status(201).json(order);
 }
 
 export async function capturePaypal(request: Request, response: Response) {
+  getPayPalCheckoutConfig();
   const booking = await capturePaypalReservation(request.auth!.userId, routeParameter(request.params.reference));
   response.status(200).json({ booking });
 }
 
 export async function releasePaypal(request: Request, response: Response) {
+  getPayPalCheckoutConfig();
   const result = await releasePaypalReservation(request.auth!.userId, routeParameter(request.params.reference));
   response.status(200).json(result);
+}
+
+export async function paypalCheckoutConfig(_request: Request, response: Response) {
+  response.setHeader('Cache-Control', 'no-store');
+  response.status(200).json(getPayPalCheckoutConfig());
 }
 
 /**

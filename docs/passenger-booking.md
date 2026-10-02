@@ -17,7 +17,12 @@ Protected-route login preserves the requested passenger URL, so a signed-out pas
 
 - `GET /api/passenger/trips?date=YYYY-MM-DD&passengers=1`
 - `GET /api/passenger/trips/:tripId/seats`
-- `POST /api/passenger/reservations/paypal/hosted` (dashboard-button payment, dispatcher-verified)
+- `POST /api/passenger/reservations/quote` (server-calculated fare and eligible passenger discounts; no seat hold)
+- `GET /api/passenger/paypal/config` (public Sandbox client ID, authenticated passenger only)
+- `POST /api/passenger/reservations/paypal` (server-priced order and seat hold)
+- `POST /api/passenger/bookings/:reference/paypal/capture` (verified capture and automatic confirmation)
+- `POST /api/passenger/bookings/:reference/paypal/release` (verified unpaid checkout only)
+- `POST /api/passenger/reservations/paypal/hosted` (historical receipt compatibility)
 - `POST /api/passenger/reservations/gcash` using `multipart/form-data`
 - `GET /api/passenger/bookings`
 - `GET /api/passenger/bookings/:reference`
@@ -32,6 +37,20 @@ confirmation screen, booking cards, booking details, and reschedule choices all
 display both local date/times so passengers know when boarding opens as well as
 when the van leaves. Rows without an explicit loading time use the established
 fallback of ten minutes before departure.
+
+New reservations close **five hours before loading starts**, using the trip's
+explicit loading time or the same ten-minute-before-departure fallback. At the
+cutoff instant, the trip disappears from reservation search and seat selection,
+fare quotes, and every reservation-creation payment path reject stale requests
+with `409 TRIP_CLOSED`. Search and seat-map responses expose
+`reservationCutoffTime`, shown on schedule cards and booking summaries. Early
+morning loading can have a cutoff on the previous day.
+
+Existing bookings, dispatcher payment verification, and capture of a PayPal
+checkout created before the cutoff continue normally. Passenger rescheduling
+closes five hours before the currently booked trip's loading time, and the destination
+trip must also remain before its reservation cutoff. Operational loading,
+queue, and departure times do not change.
 
 Reservation details expose a consistent `payment.transactionReference`: the
 PayPal transaction/order ID or the passenger-supplied GCash receipt reference.
@@ -48,9 +67,35 @@ are the fallbacks used by the public route summary, the queue-dispatch path, and
 creation.
 
 `Trip.fareAmount` is the full per-seat price the passenger pays — there is **no separate service
-fee** added on top. The payable total is therefore `trip.fareAmount * seatCount`, always computed
-on the server. The dispatcher schedule form prefills its fare from the server-provided
+fee** added on top. The subtotal is `trip.fareAmount * seatCount`; the payable total subtracts
+the server-calculated student/senior discount when claimed. Regular bookings keep the same
+subtotal and total. The dispatcher schedule form prefills its fare from the server-provided
 `defaultFare`, so the create form cannot drift from the configured default.
+
+## Student and senior passenger discounts
+
+Passengers select the number of students and senior citizens in the contact-details step.
+Each eligible passenger receives 20% off one seat; regular passengers pay the full fare.
+The combined discounted count cannot exceed the selected seats, so a passenger cannot
+receive both discounts. Every claimed discounted passenger must bring a valid ID to
+the terminal; the booking requires acknowledgement of this condition. No ID uploads
+or advance approval workflow is added.
+
+`POST /api/passenger/reservations/quote` returns the server-calculated subtotal,
+discount amount and total without creating a reservation or holding seats. Each
+eligible seat's 20% discount is rounded to two decimal places before adding the group
+discount. Reservation creation recalculates using the stored trip fare, records the
+student/senior counts and discount, and stores the net payable amount on Payment.
+PayPal orders and capture verification use that stored amount. GCash instructions,
+booking summaries and the mobile action area show the quoted discounted total.
+
+Reservation discount fields default to zero, leaving historical bookings and payments
+unchanged. Rescheduling and reallocation retain the original saved discount and payment
+amount. The dispatcher payment card exposes claimed counts for terminal ID checking.
+
+The selected 20% policy is consistent with the fare-discount provisions in
+[RA 11314](https://lawphil.net/statutes/repacts/ra2019/ra_11314_2019.html) and
+[RA 9994](https://lawphil.net/statutes/repacts/ra2010/ra_9994_2010.html).
 
 ## Seat integrity
 
@@ -70,9 +115,9 @@ The selector uses the supplied `top view of van for seat selection overlay.png` 
 
 ## Payment choices
 
-New passenger bookings offer GCash receipt verification and the merchant-supplied PayPal button.
-There is no PayPal SDK, Orders-v2, card-button, or alternate PayPal checkout in the public booking
-flow.
+New passenger bookings offer GCash receipt verification and integrated PayPal Sandbox checkout.
+The PayPal JavaScript SDK renders one PayPal payment button inside the mobile action area.
+The server retains the secret and calculates the amount using the existing fare and seat count.
 
 ### GCash
 
@@ -81,50 +126,64 @@ passenger sends the exact booking total, optionally enters the GCash reference, 
 PNG, or WEBP receipt (maximum 5 MB). `POST /api/passenger/reservations/gcash` creates a
 `PENDING_VERIFICATION` reservation. The dispatcher must approve or reject the receipt.
 
-### Posted PayPal button
+### Integrated PayPal Sandbox checkout
 
-The only PayPal integration exposed by UVGo is the merchant-supplied **single-button form**:
+Set `PAYPAL_CLIENT_ID` and `PAYPAL_CLIENT_SECRET` privately on the server using the same
+Sandbox REST application, with `PAYPAL_BASE_URL=https://api-m.sandbox.paypal.com`. The
+checkout config endpoint exposes only the client ID, PHP currency, intent, and Sandbox label.
+The HTTP checkout refuses missing credentials even when demo mode is enabled, and refuses a
+live API base URL. No secret is put into the frontend bundle.
 
-```html
-<form action="https://www.paypal.com/ncp/payment/GSVS6T37CPCJG" method="post" target="_blank">
-  <input type="submit" value="Pay Now" />
-</form>
-```
+1. Starting checkout calls the existing reservation creation transaction to validate the
+   departure and hold the selected seats. Its stored payment amount prices the PayPal order.
+2. The passenger approves payment through PayPal's secure Sandbox checkout.
+3. The server retrieves its stored order using merchant credentials, checks the order ID,
+   reservation reference, PHP amount and merchant, then captures with a deterministic request ID.
+4. Only one completed, final capture for the exact stored amount confirms the reservation.
+   Its capture ID is stored through the existing unique external-reference field. The payment,
+   reservation and booking notification update in one transaction, with no dispatcher approval.
 
-The React component is `client/src/components/passenger/PayPalHostedButton.tsx`. It posts directly
-to PayPal in a new tab and therefore needs **no SDK script, client ID, secret, iframe, or JavaScript
-load event**. The component renders only this posted button; it does not add card logos, funding
-buttons, fallback payment links, or another PayPal method.
+Repeated capture requests retrieve/reconcile the existing order instead of charging again.
+Capture and release lock the same payment row. Cancellation checks PayPal and only deletes an
+unpaid hold; approved orders and pending payments remain held. If payment completed but the
+response was lost, verification/cancellation recovers and confirms that payment instead.
 
-This external checkout does not return an authenticated order or capture id to UVGo. The booking
-flow is therefore intentionally two steps:
+The checkout offers retry/check controls. An interrupted checkout can also be reopened in
+My Bookings, where the passenger can resume the same order, check payment, or release a verified
+unpaid checkout. Closing the browser alone does not automatically release its hold.
 
-1. The passenger opens PayPal, checks that PayPal's final PHP price and quantity equal the UVGo
-   booking total, and completes payment.
-2. The passenger returns to UVGo, enters the completed transaction reference, and submits it to
-   `POST /api/passenger/reservations/paypal/hosted`.
+This initial Sandbox integration reconciles through the capture/check endpoints; it does not
+install a public webhook. If the browser closes after payment, use My Bookings to check and
+reconcile. A future webhook requires a deployed HTTPS listener and verified PayPal events.
 
-The server creates a `PAYPAL` payment and a `PENDING_VERIFICATION` reservation. A reference is
-required but is **not proof of payment**. The Goa dispatcher must verify the completed transaction,
-recipient, currency, full amount, and that it has not funded another booking before approving. A
-rejected report moves the reservation to `FORFEITED`, releasing the seat hold. A reported PayPal
-transaction reference cannot be submitted twice. This is enforced by a normalized, database-unique
-payment-reference key as well as the friendly pre-submission check, so concurrent requests cannot
-reuse the same external transaction.
-
-The PayPal dashboard button currently offers Regular, Student and PWD values, while UVGo has one
-server-authoritative fare (`trip.fareAmount × seat count`) and no concession-type field. UVGo does
-not silently accept a discounted dashboard choice: the passenger is explicitly told not to pay if
-PayPal's final total does not match the booking total. A future student/senior/PWD flow requires an
-eligibility model and dispatcher verification before those prices can be integrated safely.
-
-The older Orders-v2 helpers remain only for historical service-level compatibility tests. Their
-create, capture, and cancel routes are not registered, so they cannot be used as a second public
-PayPal payment method.
+Historical hosted-button receipts and existing records retain their dispatcher-verification
+API for compatibility. The hosted button and receipt form are no longer shown for new PayPal
+checkouts. GCash receipt verification and all existing rescheduling rules are unchanged.
 
 ## Rescheduling
 
-The server, not only the interface, enforces the 24-hour rule. Only a confirmed, rescheduled, or reallocated booking can be moved, and its current departure must be at least 24 hours away. The passenger must select another open future Goa trip and the same number of available seats. No cancellation or refund action exists.
+The server enforces a cutoff **five hours before the currently booked trip's
+loading time**, replacing the former 24-hour-before-departure rule. For example,
+10:00 AM loading requires a reschedule before 5:00 AM. At the cutoff instant,
+`canReschedule` is false and stale requests return `409 RESCHEDULE_WINDOW_CLOSED`.
+Legacy trips without an explicit loading time use the standard loading fallback.
+
+Only confirmed, rescheduled, or reallocated bookings can be moved. Each reservation
+allows **three successful passenger reschedules**. `Reservation.rescheduleCount`
+persists the number of changes, and the API supplies `rescheduleCutoffTime`,
+`rescheduleCount`, `rescheduleLimit`, and `reschedulesRemaining` for booking details.
+The third success disables further rescheduling; a fourth request returns
+`409 RESCHEDULE_LIMIT_REACHED`. The reservation row is locked during the transaction
+so concurrent submissions cannot exceed the limit. Failed requests and submissions
+that leave the trip and seats unchanged do not consume a change. Automatic
+dispatcher reallocations retain the counter without consuming an attempt.
+
+The migration initializes historical counts from retained reschedule notifications
+and records with `RESCHEDULED` status. Previously deleted historical notifications
+cannot be reconstructed; new counts remain independent of notification deletion.
+The passenger must choose an open Goa trip before its reservation cutoff with the
+same number of available seats. Seats, payment amounts, and discounts retain their
+existing rules. No cancellation or refund action exists.
 
 ## Phase smoke test
 

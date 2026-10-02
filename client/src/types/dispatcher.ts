@@ -93,6 +93,16 @@ export interface DispatcherPendingArrival {
   observedAt: string | null;
 }
 
+export interface DepartureHistoryEntry {
+  id: string;
+  routeCode: string;
+  vanId: string;
+  driver: string;
+  departedAt: string;
+  scheduledDepartureTime: string | null;
+  passengerCount: number | null;
+}
+
 export interface DispatcherPayment {
   id: string;
   method: 'paypal' | 'gcash';
@@ -111,6 +121,9 @@ export interface DispatcherPayment {
   reservation: {
     reference: string;
     passengerName: string;
+    studentPassengers?: number;
+    seniorPassengers?: number;
+    discountAmount?: number;
     contact: string | null;
     route: string;
     departureTime: string;

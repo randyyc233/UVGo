@@ -46,6 +46,13 @@ export const createBackupDispatcherSchema = z.object({
     .regex(/\d/, 'Temporary password must contain a number.'),
 }).strict();
 
+export const publicRouteFareSchema = z.object({
+  fareAmount: z.number()
+    .min(0.01, 'Fare must be at least ₱0.01.')
+    .max(10_000, 'Fare cannot exceed ₱10,000.')
+    .multipleOf(0.01, 'Use no more than two decimal places.'),
+}).strict();
+
 export const dispatcherProfileSchema = z.object({
   name: z.string().trim().min(2, 'Full name must be at least 2 characters.').max(120, 'Full name must be 120 characters or fewer.'),
   email: z.email('Please enter a valid email address.').max(191).transform((value) => value.trim().toLowerCase()),
@@ -73,6 +80,8 @@ export const driverAnnouncementSchema = z.object({
 export const departureConfirmationSchema = z.object({
   reason: z.string().trim().min(3, 'Describe how the departure was verified.').max(500),
 });
+
+export const departureHistoryQuerySchema = z.object({ date: z.iso.date() });
 
 export const managedScheduleSchema = z
   .object({

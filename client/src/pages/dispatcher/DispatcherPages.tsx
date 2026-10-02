@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 import {
   AlertTriangle,
   BellRing,
@@ -7,11 +7,14 @@ import {
   Check,
   CheckCheck,
   CheckCircle2,
+  ChevronDown,
+  ChevronUp,
   Ellipsis,
   FileClock,
   ListOrdered,
   MapPin,
   MapPinned,
+  Maximize2,
   Minus,
   Plus,
   Route,
@@ -28,6 +31,7 @@ import { Link } from "react-router-dom";
 import { apiRequest, ApiError } from "../../api/http";
 import { useAuth } from "../../auth/authContext";
 import { DemoControls } from "../../components/dispatcher/DemoControls";
+import { DepartureHistory } from "../../components/dispatcher/DepartureHistory";
 import { FleetMap } from "../../components/dispatcher/FleetMap";
 import { MobileFleetSheet } from "../../components/dispatcher/MobileFleetSheet";
 import { formatDateTime12, formatTime12 } from "../../lib/dateTime";
@@ -39,6 +43,7 @@ import {
   EmptyState,
   Input,
   LoadingSkeleton,
+  Modal,
   Select,
   StatusBadge,
   Tabs,
@@ -619,21 +624,21 @@ export function DispatcherQueuePage() {
       value: entries.length,
       accent: "border-primary/15 bg-primary-soft/55",
       valueClass: "text-primary-dark",
-      span: "col-span-2 sm:col-span-1",
+      mobileLabel: "Total",
     },
     {
       label: "At terminal",
       value: entries.filter((entry) => entry.vehicleStatus === "at_terminal").length,
       accent: "border-success/15 bg-success-soft/70",
       valueClass: "text-success",
-      span: "col-span-2 sm:col-span-1",
+      mobileLabel: "Terminal",
     },
     {
       label: "Incoming",
       value: entries.filter((entry) => entry.vehicleStatus === "incoming").length,
       accent: "border-info/15 bg-info-soft/70",
       valueClass: "text-info",
-      span: "col-span-2 sm:col-span-1",
+      mobileLabel: "Incoming",
     },
     {
       label: route === "goa" ? "Late" : "Delayed",
@@ -642,31 +647,33 @@ export function DispatcherQueuePage() {
         : entries.filter((entry) => entry.status === "delayed").length,
       accent: "border-danger/15 bg-danger-soft/65",
       valueClass: "text-danger",
-      span: "col-span-3 sm:col-span-1",
+      mobileLabel: route === "goa" ? "Late" : "Delayed",
     },
     {
       label: "Ready",
       value: entries.filter((entry) => entry.status === "ready_for_dispatch").length,
       accent: "border-success/15 bg-success-soft/70",
       valueClass: "text-success",
-      span: "col-span-3 sm:col-span-1",
+      mobileLabel: "Ready",
     },
   ];
 
   return (
     <div className="space-y-4">
-      <Card className="p-4 sm:p-5">
-        <p className="text-xs font-bold uppercase tracking-[0.12em] text-primary">Assigned route</p>
-        <h2 className="mt-1 text-xl font-black">{label(route)} queue</h2>
-        <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-text-muted">
+      <Card className="p-3 sm:p-5">
+        <div className="hidden sm:block">
+          <p className="text-xs font-bold uppercase tracking-[0.12em] text-primary">Assigned route</p>
+          <h2 className="mt-1 text-xl font-black">{label(route)} queue</h2>
+        </div>
+        <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-[11px] text-text-muted sm:mt-2 sm:justify-start sm:text-xs">
           <span className="inline-flex items-center gap-1.5 font-semibold text-success"><span className="h-2 w-2 rounded-full bg-success" />Live queue</span>
           <span>{lastUpdatedAt ? `Last checked ${time(lastUpdatedAt)}` : "Checking for updates…"}</span>
         </div>
-        <div className="mt-4 grid grid-cols-6 gap-2 sm:grid-cols-5" aria-label="Queue status summary">
+        <div className="mt-3 grid grid-cols-5 gap-1.5 sm:mt-4 sm:gap-2" aria-label="Queue status summary">
           {queueMetrics.map((metric) => (
-            <div key={metric.label} className={`rounded-control border px-2 py-2 text-center sm:px-3 sm:py-3 ${metric.accent} ${metric.span}`}>
+            <div key={metric.label} aria-label={`${metric.label}: ${metric.value}`} className={`min-w-0 rounded-control border px-0.5 py-2 text-center min-[360px]:px-1 sm:px-3 sm:py-3 ${metric.accent}`}>
               <p className={`text-lg font-black leading-none sm:text-2xl ${metric.valueClass}`}>{metric.value}</p>
-              <p className="mt-1 text-[10px] font-semibold leading-4 text-text-secondary sm:text-xs">{metric.label}</p>
+              <p className="mt-1 whitespace-nowrap text-[9px] font-semibold leading-4 text-text-secondary min-[360px]:text-[10px] sm:text-xs"><span className="sm:hidden">{metric.mobileLabel}</span><span className="hidden sm:inline">{metric.label}</span></p>
             </div>
           ))}
         </div>
@@ -793,6 +800,12 @@ export function DispatcherQueuePage() {
       </ConfirmationDialog>
     </div>
   );
+}
+
+export function DispatcherDepartureHistoryPage() {
+  const { user } = useAuth();
+  const route = user?.dispatcherRoute ?? "goa";
+  return <DepartureHistory key={route} route={route} />;
 }
 
 function QueueActions({
@@ -952,33 +965,38 @@ function QueueMobileCard({
 
   return (
     <article className="rounded-card border border-border bg-surface p-3 shadow-sm sm:p-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="flex min-w-0 items-center gap-3">
-          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary-soft font-black text-primary-dark">
-            {entry.position}
-          </span>
-          <div className="min-w-0">
-            <p className="truncate font-extrabold">{entry.vanId}</p>
-            <p className="truncate text-xs text-text-secondary">{entry.driver}</p>
-          </div>
+      <div className="flex items-center gap-2.5">
+        <span aria-label={`Queue position ${entry.position}`} className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-control font-black ${entry.position === 1 ? "bg-primary text-white" : "bg-primary-soft text-primary-dark"}`}>
+          {entry.position}
+        </span>
+        <div className="min-w-0 flex-1">
+          <p className="break-words text-sm font-extrabold sm:text-base">{entry.vanId}</p>
+          <p className="break-words text-xs text-text-secondary">{entry.driver}</p>
         </div>
-        <span className="shrink-0"><StatusBadge tone={entry.isLate ? "danger" : tone(entry.status)}>{entry.isLate ? "Late" : queueStatusLabel(entry.status)}</StatusBadge></span>
+        <BusFront className="h-5 w-5 shrink-0 text-primary" aria-hidden="true" />
       </div>
-      <div className={`mt-3 items-end gap-3 text-xs ${isGoa ? "grid grid-cols-1 min-[420px]:grid-cols-[minmax(0,1fr)_auto]" : "flex justify-end"}`}>
-        {isGoa ? (
-          <div className="min-w-0">
-            <p className="text-text-muted">Loading / Departure</p>
-            <p className="mt-0.5 font-semibold text-text-primary">Loading {entry.scheduledLoadingTime ? formatTime12(entry.scheduledLoadingTime) : "not scheduled"}</p>
-            <p className="mt-0.5 text-text-muted">Departure {entry.departureTime ? formatTime12(entry.departureTime) : "not scheduled"}</p>
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        {entry.position === 1 ? <span className="text-[11px] font-bold text-primary-dark">First in queue</span> : null}
+        <StatusBadge tone={entry.isLate ? "danger" : tone(entry.status)}>{entry.isLate ? "Late" : queueStatusLabel(entry.status)}</StatusBadge>
+      </div>
+      {isGoa ? (
+        <dl className="mt-3 grid grid-cols-2 gap-2 rounded-control bg-background px-2.5 py-2 text-xs">
+          <div className="flex min-w-0 flex-wrap items-baseline gap-x-1.5 gap-y-0.5">
+            <dt className="text-text-muted">Loading</dt>
+            <dd className="font-bold text-text-primary">{entry.scheduledLoadingTime ? formatTime12(entry.scheduledLoadingTime) : "Not scheduled"}</dd>
           </div>
-        ) : null}
-        <div className="flex items-center justify-between gap-3 min-[420px]:block min-[420px]:text-right">
-          <p className="text-text-muted">Occupancy</p>
-          <div className="mt-1"><PassengerStepper entry={entry} loading={loading || updatingPassengers} onChange={adjustPassengerCount} /></div>
-        </div>
+          <div className="flex min-w-0 flex-wrap items-baseline gap-x-1.5 gap-y-0.5">
+            <dt className="text-text-muted">Departure</dt>
+            <dd className="font-bold text-text-primary">{entry.departureTime ? formatTime12(entry.departureTime) : "Not scheduled"}</dd>
+          </div>
+        </dl>
+      ) : null}
+      <div className="mt-2 flex min-h-[2.75rem] items-center justify-between gap-2 text-xs">
+        <p className="font-semibold text-text-secondary">Passengers aboard</p>
+        <PassengerStepper entry={entry} loading={loading || updatingPassengers} onChange={adjustPassengerCount} />
       </div>
       <div
-        className="mt-2 h-1.5 overflow-hidden rounded-pill bg-border"
+        className="mt-1 h-1.5 overflow-hidden rounded-pill bg-border"
         role="progressbar"
         aria-label={`${entry.vanId} occupancy`}
         aria-valuemin={0}
@@ -987,16 +1005,19 @@ function QueueMobileCard({
       >
         <div className="h-full rounded-pill bg-primary transition-[width]" style={{ width: `${occupancyPercent}%` }} />
       </div>
-      <div className="mt-3 flex items-center justify-between gap-3 border-t border-border pt-3 text-xs">
-        <div className="min-w-0">
-          <p className="text-text-muted">Driver assignment</p>
-          <p className="mt-0.5 truncate font-semibold text-text-primary">{entry.assignment?.driver ?? "No active assignment"}</p>
+      <details className="group mt-2 border-t border-border text-xs">
+        <summary className="flex min-h-touch cursor-pointer list-none items-center justify-between gap-2 font-semibold text-text-secondary [&::-webkit-details-marker]:hidden">
+          Driver assignment
+          <ChevronDown className="h-4 w-4 shrink-0 transition-transform group-open:rotate-180" aria-hidden="true" />
+        </summary>
+        <div className="flex flex-wrap items-center justify-between gap-2 pb-3">
+          <p className="min-w-0 break-words font-semibold text-text-primary">{entry.assignment?.driver ?? "No active assignment"}</p>
+          {entry.assignment ? (
+            <StatusBadge tone={tone(entry.assignment.status)}>{assignmentStatusLabel(entry.assignment.status)}</StatusBadge>
+          ) : null}
         </div>
-        {entry.assignment ? (
-          <span className="shrink-0"><StatusBadge tone={tone(entry.assignment.status)}>{assignmentStatusLabel(entry.assignment.status)}</StatusBadge></span>
-        ) : null}
-      </div>
-      <div className="mt-3 border-t border-border pt-3">
+      </details>
+      <div className="border-t border-border pt-2">
         <QueueActions entry={entry} loading={loading} runAction={runAction} />
       </div>
     </article>
@@ -1010,6 +1031,7 @@ export function DispatcherPaymentsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [rejecting, setRejecting] = useState<DispatcherPayment | null>(null);
+  const [deleting, setDeleting] = useState<DispatcherPayment | null>(null);
   const [reason, setReason] = useState("");
   const toast = useToast();
   useEffect(() => {
@@ -1065,6 +1087,24 @@ export function DispatcherPaymentsPage() {
     }
   }
 
+  async function deleteEntry(payment: DispatcherPayment) {
+    setLoading(true);
+    setError(null);
+    try {
+      const response = await apiRequest<{
+        payments: { gcash: DispatcherPayment[]; paypal: DispatcherPayment[] };
+      }>(`/dispatcher/payments/${encodeURIComponent(payment.id)}`, { method: "DELETE" });
+      setGcash(response.payments.gcash);
+      setPaypal(response.payments.paypal);
+      setDeleting(null);
+      toast.success("Reservation entry deleted from your list.");
+    } catch (caught) {
+      setError(caught instanceof ApiError ? caught.message : "Reservation entry could not be deleted.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
   const visible = active === "gcash" ? gcash : paypal;
   return (
     <div className="space-y-4">
@@ -1106,6 +1146,7 @@ export function DispatcherPaymentsPage() {
                   loading={loading}
                   approve={() => void decide(payment, "approve")}
                   reject={() => { setReason(""); setRejecting(payment); }}
+                  deleteEntry={() => setDeleting(payment)}
                 />
               ))
             ) : (
@@ -1120,7 +1161,7 @@ export function DispatcherPaymentsPage() {
       </Card>
       <Card className="flex items-start gap-3 p-4 text-sm leading-6 text-text-secondary">
         <ShieldCheck className="mt-1 h-4 w-4 shrink-0 text-primary" />
-        <p>Verify GCash receipts and reported PayPal payments before approving. For PayPal, check the transaction, recipient, PHP amount, completed status, and that the transaction has not already been used. SDK-captured PayPal orders remain read-only.</p>
+        <p>Verify GCash receipts and reported PayPal payments before approving. For PayPal, check the transaction, recipient, PHP amount, completed status, and that the transaction has not already been used. SDK-captured PayPal orders are verified automatically. Delete clears approved or rejected entries from your list while keeping the passenger’s booking and payment history.</p>
       </Card>
       <ConfirmationDialog
         open={Boolean(rejecting)}
@@ -1140,7 +1181,64 @@ export function DispatcherPaymentsPage() {
           required
         />
       </ConfirmationDialog>
+      <ConfirmationDialog
+        open={Boolean(deleting)}
+        title={`Delete ${deleting?.reservation.reference ?? "reservation entry"}?`}
+        description="This removes the reviewed entry from your dispatcher list. The passenger’s booking, reserved seats, payment history, and dispatch logs are kept."
+        confirmLabel="Delete entry"
+        destructive
+        loading={loading}
+        onClose={() => { if (!loading) setDeleting(null); }}
+        onConfirm={() => { if (deleting && !loading) void deleteEntry(deleting); }}
+      />
     </div>
+  );
+}
+
+function PaymentReceipt({ payment, imageClassName }: { payment: DispatcherPayment; imageClassName: string }) {
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [imageLoading, setImageLoading] = useState(true);
+  const [imageFailed, setImageFailed] = useState(false);
+  if (!payment.receiptUrl) return null;
+  const receiptLabel = `${payment.method === "gcash" ? "GCash" : "PayPal"} receipt for ${payment.reservation.reference}`;
+
+  return (
+    <>
+      <button
+        type="button"
+        className="group block w-full overflow-hidden rounded-control bg-white text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2"
+        aria-label={`View ${receiptLabel}`}
+        aria-haspopup="dialog"
+        onClick={() => { setImageLoading(true); setImageFailed(false); setPreviewOpen(true); }}
+      >
+        <img src={payment.receiptUrl} alt={receiptLabel} className={imageClassName} />
+        <span className="flex items-center justify-center gap-1.5 bg-primary-soft px-2 py-2 text-xs font-bold group-hover:bg-accent">
+          <Maximize2 className="h-3.5 w-3.5" aria-hidden="true" />
+          Click to view receipt
+        </span>
+      </button>
+      <Modal
+        open={previewOpen}
+        title="Payment receipt"
+        description={`${payment.reservation.reference} · ${payment.reservation.passengerName}`}
+        className="max-w-4xl"
+        onClose={() => setPreviewOpen(false)}
+        footer={<a href={payment.receiptUrl} target="_blank" rel="noopener noreferrer" className="inline-flex min-h-touch items-center justify-center gap-2 rounded-control px-4 py-2 text-sm font-bold text-primary hover:bg-primary-soft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"><Maximize2 className="h-4 w-4" aria-hidden="true" />Open full-size image</a>}
+      >
+        {imageLoading ? <p role="status" className="mb-3 text-sm text-text-secondary">Loading receipt…</p> : null}
+        {imageFailed ? (
+          <p role="alert" className="rounded-control bg-danger-soft p-4 text-sm text-danger">The receipt could not be loaded. Close this preview and try again.</p>
+        ) : (
+          <img
+            src={payment.receiptUrl}
+            alt={receiptLabel}
+            className="max-h-[65dvh] w-full rounded-control bg-cream object-contain"
+            onLoad={() => setImageLoading(false)}
+            onError={() => { setImageLoading(false); setImageFailed(true); }}
+          />
+        )}
+      </Modal>
+    </>
   );
 }
 
@@ -1149,35 +1247,73 @@ function PaymentCard({
   loading,
   approve,
   reject,
+  deleteEntry,
 }: {
   payment: DispatcherPayment;
   loading: boolean;
   approve: () => void;
   reject: () => void;
+  deleteEntry: () => void;
 }) {
+  const [detailsExpanded, setDetailsExpanded] = useState(false);
+  const detailsId = useId();
   return (
-    <article className="min-w-0 rounded-card border border-border p-4">
+    <article className="min-w-0 rounded-card border border-border p-3 sm:p-4">
       <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-3">
         <div className="min-w-0">
           <p className="font-extrabold">{payment.reservation.passengerName}</p>
           <p className="mt-1 break-words text-xs leading-5 text-text-secondary">
-            {payment.reservation.reference} · {payment.reservation.route} · Seat{" "}
-            {payment.reservation.seats.join(", ")}
+            {payment.reservation.reference} · {payment.reservation.route}
           </p>
         </div>
         <p className="whitespace-nowrap font-black text-primary-dark">
           ₱{payment.amount.toFixed(2)}
         </p>
       </div>
+      <div className="mt-2 flex items-center justify-between gap-3 sm:hidden">
+        <StatusBadge tone={tone(payment.status)}>{label(payment.status)}</StatusBadge>
+        <button
+          type="button"
+          className="inline-flex min-h-touch shrink-0 items-center justify-center gap-1.5 rounded-control px-2 text-sm font-bold text-primary hover:bg-primary-soft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+          aria-expanded={detailsExpanded}
+          aria-controls={detailsId}
+          aria-label={`${detailsExpanded ? "Hide" : "View"} details for ${payment.reservation.passengerName}, ${payment.reservation.reference}`}
+          onClick={() => setDetailsExpanded((expanded) => !expanded)}
+        >
+          {detailsExpanded ? "Hide details" : "View details"}
+          {detailsExpanded ? <ChevronUp className="h-4 w-4" aria-hidden="true" /> : <ChevronDown className="h-4 w-4" aria-hidden="true" />}
+        </button>
+      </div>
+      <div id={detailsId} className={detailsExpanded ? "block" : "hidden sm:block"}>
+      {(payment.reservation.discountAmount ?? 0) > 0 ? <p className="mt-3 rounded-control bg-primary-soft p-3 text-sm leading-6">
+        20% discount: {payment.reservation.studentPassengers} student(s), {payment.reservation.seniorPassengers} senior citizen(s) · ₱{payment.reservation.discountAmount!.toFixed(2)} saved. Check valid passenger IDs at the terminal.
+      </p> : null}
+      <section className="mt-4 rounded-control bg-cream p-3" aria-label={`Reservation details for ${payment.reservation.reference}`}>
+        <h3 className="text-sm font-extrabold">Reservation details</h3>
+        <dl className="mt-3 grid gap-3 sm:grid-cols-2">
+          <div>
+            <dt className="text-xs font-semibold text-text-secondary">Selected seats</dt>
+            <dd className="mt-1.5">
+              {payment.reservation.seats.length ? (
+                <ul className="flex flex-wrap gap-1.5" aria-label="Selected seat numbers">
+                  {payment.reservation.seats.map((seat) => (
+                    <li key={seat} className="rounded-control border border-primary/20 bg-primary-soft px-3 py-1.5 text-sm font-extrabold text-primary-dark">Seat #{seat}</li>
+                  ))}
+                </ul>
+              ) : <span className="text-sm text-text-secondary">No seats currently assigned</span>}
+            </dd>
+          </div>
+          <div>
+            <dt className="text-xs font-semibold text-text-secondary">Departure</dt>
+            <dd className="mt-1.5 text-sm font-semibold">{time(payment.reservation.departureTime)}</dd>
+          </div>
+        </dl>
+      </section>
       {payment.method === "gcash" ? (
         <div className="mt-4 grid min-w-0 gap-3 sm:grid-cols-[8rem_minmax(0,1fr)]">
           <div className="flex min-h-24 items-center justify-center overflow-hidden rounded-control bg-cream">
             {payment.receiptUrl ? (
-              <img
-                src={payment.receiptUrl}
-                alt={`GCash receipt for ${payment.reservation.reference}`}
-                className="h-24 w-full object-cover"
-              />
+              <PaymentReceipt payment={payment} imageClassName="h-24 w-full object-cover" />
             ) : (
               <span className="px-2 text-center text-xs text-text-secondary">
                 Demo receipt metadata
@@ -1206,14 +1342,14 @@ function PaymentCard({
         </div>
       ) : (
         <div className="mt-4 space-y-2 rounded-control bg-cream p-3 text-sm text-text-secondary">
-          {payment.receiptUrl ? <img src={payment.receiptUrl} alt={`PayPal receipt for ${payment.reservation.reference}`} className="max-h-64 w-full rounded-control bg-white object-contain" /> : null}
+          <PaymentReceipt payment={payment} imageClassName="max-h-64 w-full object-contain" />
           <p className="break-all"><strong className="text-text-primary">Transaction ID/reference:</strong>{" "}{payment.transactionReference || "Not supplied"}</p>
           <p><strong className="text-text-primary">Contact:</strong>{" "}{payment.reservation.contact ?? "Not supplied"}</p>
           <p>Manually check this payment in the merchant’s PayPal account. A passenger-supplied reference alone is not proof of payment.</p>
         </div>
       )}
       <div className="mt-4 flex min-w-0 flex-col gap-3 border-t border-border pt-3 sm:flex-row sm:items-center sm:justify-between">
-        <span className="self-start">
+        <span className="hidden self-start sm:inline-block">
           <StatusBadge tone={tone(payment.status)}>
             {label(payment.status)}
           </StatusBadge>
@@ -1241,7 +1377,19 @@ function PaymentCard({
               Reject
             </Button>
           </div>
+        ) : ["verified", "captured", "rejected"].includes(payment.status) ? (
+          <Button
+            size="sm"
+            variant="danger"
+            className="w-full sm:w-auto"
+            disabled={loading}
+            onClick={deleteEntry}
+            leadingIcon={<Trash2 className="h-4 w-4" />}
+          >
+            Delete
+          </Button>
         ) : null}
+      </div>
       </div>
     </article>
   );
@@ -1751,6 +1899,12 @@ export function DispatcherMorePage() {
       icon: ListOrdered,
       title: "Queue management",
       text: "Dispatch, reorder, delay, or replace vehicles.",
+    },
+    {
+      to: "/dispatcher/departure-history",
+      icon: FileClock,
+      title: "Departure history",
+      text: "View confirmed departures by day and manage your history.",
     },
     {
       to: "/dispatcher/fleet",

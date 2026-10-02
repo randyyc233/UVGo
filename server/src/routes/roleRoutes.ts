@@ -6,6 +6,10 @@ import {
   booking,
   bookings,
   createGcash,
+  createPaypal,
+  capturePaypal,
+  releasePaypal,
+  paypalCheckoutConfig,
   createPaypalHosted,
   changePassword,
   deleteNotification,
@@ -15,6 +19,7 @@ import {
   reschedule,
   searchTrips,
   tripSeats,
+  reservationQuote,
   updateProfile,
 } from '../controllers/passengerController.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
@@ -46,6 +51,7 @@ import {
   deleteAllAlerts as dispatcherDeleteAllAlerts,
   deleteAlert as dispatcherDeleteAlert,
   deleteDriver as dispatcherDeleteDriver,
+  deletePayment as dispatcherDeletePayment,
   demoDispatchEngine,
   demoGeofenceEntry,
   demoState,
@@ -56,8 +62,12 @@ import {
   dispatcherAccounts,
   paymentDecision,
   payments as dispatcherPayments,
+  publicFare as dispatcherPublicFare,
+  updatePublicFare as dispatcherUpdatePublicFare,
   queue as dispatcherQueue,
   queueAction,
+  departureHistory as dispatcherDepartureHistory,
+  deleteDepartureHistory as dispatcherDeleteDepartureHistory,
   receipt as dispatcherReceipt,
   removeLog as dispatcherRemoveLog,
   removeAllLogs as dispatcherRemoveAllLogs,
@@ -86,6 +96,11 @@ passengerRouter.get('/session', (request, response) => {
 });
 passengerRouter.get('/trips', asyncHandler(searchTrips));
 passengerRouter.get('/trips/:tripId/seats', asyncHandler(tripSeats));
+passengerRouter.post('/reservations/quote', asyncHandler(reservationQuote));
+passengerRouter.get('/paypal/config', asyncHandler(paypalCheckoutConfig));
+passengerRouter.post('/reservations/paypal', asyncHandler(createPaypal));
+passengerRouter.post('/bookings/:reference/paypal/capture', asyncHandler(capturePaypal));
+passengerRouter.post('/bookings/:reference/paypal/release', asyncHandler(releasePaypal));
 passengerRouter.post('/reservations/paypal/hosted', receiptUpload.single('receipt'), asyncHandler(createPaypalHosted));
 passengerRouter.post('/reservations/gcash', receiptUpload.single('receipt'), asyncHandler(createGcash));
 passengerRouter.get('/bookings', asyncHandler(bookings));
@@ -119,6 +134,8 @@ dispatcherRouter.get('/session', (request, response) => {
   response.status(200).json({ role: 'dispatcher', route: request.auth?.dispatcherRoute?.toLowerCase(), userId: request.auth?.userId });
 });
 dispatcherRouter.patch('/profile', asyncHandler(dispatcherUpdateProfile));
+dispatcherRouter.get('/profile/public-fare', asyncHandler(dispatcherPublicFare));
+dispatcherRouter.patch('/profile/public-fare', asyncHandler(dispatcherUpdatePublicFare));
 dispatcherRouter.post('/profile/password', asyncHandler(dispatcherChangePassword));
 dispatcherRouter.get('/dashboard', asyncHandler(dispatcherDashboard));
 dispatcherRouter.delete('/alerts', asyncHandler(dispatcherDeleteAllAlerts));
@@ -127,7 +144,10 @@ dispatcherRouter.delete('/alerts/:alertId', asyncHandler(dispatcherDeleteAlert))
 dispatcherRouter.get('/fleet', asyncHandler(dispatcherFleet));
 dispatcherRouter.get('/queue', asyncHandler(dispatcherQueue));
 dispatcherRouter.post('/queue/:queueEntryId/actions', asyncHandler(queueAction));
+dispatcherRouter.get('/departures/history', asyncHandler(dispatcherDepartureHistory));
+dispatcherRouter.delete('/departures/history/:tripId', asyncHandler(dispatcherDeleteDepartureHistory));
 dispatcherRouter.get('/payments', asyncHandler(dispatcherPayments));
+dispatcherRouter.delete('/payments/:paymentId', asyncHandler(dispatcherDeletePayment));
 dispatcherRouter.post('/payments/:paymentId/decision', asyncHandler(paymentDecision));
 dispatcherRouter.get('/payments/:paymentId/receipt', asyncHandler(dispatcherReceipt));
 dispatcherRouter.get('/logs', asyncHandler(dispatcherLogs));

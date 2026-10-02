@@ -13,13 +13,25 @@ export const tripSearchSchema = z.object({
   passengers: z.coerce.number().int().min(1).max(11).default(1),
 });
 
-export const paypalReservationSchema = z.object({
+const reservationFields = z.object({
   tripId: z.string().min(1),
   seats,
   contact: z.string().trim().min(7).max(32),
+  studentPassengers: z.coerce.number().int().min(0).max(11).default(0),
+  seniorPassengers: z.coerce.number().int().min(0).max(11).default(0),
+  discountIdAcknowledged: z.preprocess((value) => value === 'true' ? true : value === 'false' ? false : value, z.boolean().default(false)),
 });
 
-export const gcashReservationSchema = paypalReservationSchema.extend({
+const discountCountsValid = (input: { seats: number[]; studentPassengers: number; seniorPassengers: number }) => input.studentPassengers + input.seniorPassengers <= input.seats.length;
+const discountIdValid = (input: { studentPassengers: number; seniorPassengers: number; discountIdAcknowledged: boolean }) => input.studentPassengers + input.seniorPassengers === 0 || input.discountIdAcknowledged;
+export const paypalReservationSchema = reservationFields
+  .refine(discountCountsValid, 'Discounted passengers cannot exceed the selected seats.')
+  .refine(discountIdValid, 'Confirm that discounted passengers will bring valid IDs to the terminal.');
+
+export const reservationQuoteSchema = reservationFields.omit({ contact: true, discountIdAcknowledged: true })
+  .refine(discountCountsValid, 'Discounted passengers cannot exceed the selected seats.');
+
+export const gcashReservationSchema = paypalReservationSchema.safeExtend({
   gcashReference: z.string().trim().max(100).optional().default(''),
 });
 
@@ -28,7 +40,7 @@ export const gcashReservationSchema = paypalReservationSchema.extend({
  * checkout page, so the passenger uploads their PayPal receipt and may include
  * its reference for dispatcher verification — the same shape as a GCash receipt.
  */
-export const paypalHostedReservationSchema = paypalReservationSchema.extend({
+export const paypalHostedReservationSchema = paypalReservationSchema.safeExtend({
   paypalTransactionReference: z.string().trim().max(100).optional().default(''),
 });
 

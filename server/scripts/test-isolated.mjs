@@ -22,13 +22,14 @@ let created = false;
 try {
   await admin.$executeRawUnsafe(`CREATE DATABASE \`${databaseName}\``);
   created = true;
-  const env = { ...process.env, DATABASE_URL: testUrl.toString(), UPLOAD_DIR: uploadDirectory, NODE_ENV: 'test', DEMO_MODE: testDemoMode, UVGO_ISOLATED_TEST_DATABASE: databaseName };
+  // Regression tests use demo helpers or mocked PayPal responses, never the developer's real credentials.
+  const env = { ...process.env, DATABASE_URL: testUrl.toString(), UPLOAD_DIR: uploadDirectory, NODE_ENV: 'test', DEMO_MODE: testDemoMode, PAYPAL_CLIENT_ID: '', PAYPAL_CLIENT_SECRET: '', PAYPAL_BASE_URL: 'https://api-m.sandbox.paypal.com', UVGO_ISOLATED_TEST_DATABASE: databaseName };
   // Resolve workspace-hoisted packages without depending on shell execution.
   const { createRequire } = await import('node:module');
   const require = createRequire(import.meta.url);
   const migrate = spawnSync(process.execPath, [require.resolve('prisma/build/index.js'), 'migrate', 'deploy'], { env, stdio: 'inherit' });
   if (migrate.status !== 0) throw new Error('Isolated test migration failed.');
-  const result = spawnSync(process.execPath, [require.resolve('tsx/cli'), '--test', '--test-concurrency=1', ...process.argv.slice(2), 'tests/critical-business-rules.test.ts'], { env, stdio: 'inherit' });
+  const result = spawnSync(process.execPath, [require.resolve('tsx/cli'), '--test', '--test-concurrency=1', ...process.argv.slice(2), 'tests/critical-business-rules.test.ts', 'tests/paypal-sandbox.test.ts', 'tests/reservation-discounts.test.ts'], { env, stdio: 'inherit' });
   process.exitCode = result.status ?? 1;
 } finally {
   // This exact database was created above by this run and contains test fixtures only.

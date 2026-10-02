@@ -687,14 +687,54 @@ function serializePayment(payment: Awaited<ReturnType<typeof prisma.payment.find
       route: routeLabels[payment.reservation.trip.route],
       departureTime: payment.reservation.trip.scheduledOrTriggeredTime.toISOString(),
       seats: payment.reservation.seats.map((seat) => seat.seatNumber),
+      studentPassengers: payment.reservation.studentPassengers,
+      seniorPassengers: payment.reservation.seniorPassengers,
+      discountAmount: Number(payment.reservation.discountAmount),
       status: payment.reservation.status.toLowerCase(),
     },
   };
 }
 
-export async function getDispatcherPayments(route: RouteCode) {
-  const payments = await prisma.payment.findMany({ where: { reservation: { trip: { route } } }, orderBy: { createdAt: 'desc' }, include: paymentInclude });
+const paymentDismissalPrefix = 'payment-list:';
+const reviewedPaymentStatuses: PaymentStatus[] = [PaymentStatus.VERIFIED, PaymentStatus.CAPTURED, PaymentStatus.REJECTED];
+
+export async function getDispatcherPayments(route: RouteCode, dispatcherId?: string) {
+  const dismissed = dispatcherId ? await prisma.dispatcherAlertRead.findMany({
+    where: { userId: dispatcherId, alertKey: { startsWith: paymentDismissalPrefix }, dismissedAt: { not: null } },
+    select: { alertKey: true },
+  }) : [];
+  const dismissedIds = dismissed.map((receipt) => receipt.alertKey.slice(paymentDismissalPrefix.length));
+  const payments = await prisma.payment.findMany({
+    where: {
+      reservation: { trip: { route } },
+      NOT: { id: { in: dismissedIds }, status: { in: reviewedPaymentStatuses } },
+    },
+    orderBy: { createdAt: 'desc' },
+    include: paymentInclude,
+  });
   return { gcash: payments.filter((payment) => payment.method === PaymentMethod.GCASH_RECEIPT).map(serializePayment), paypal: payments.filter((payment) => payment.method === PaymentMethod.PAYPAL).map(serializePayment) };
+}
+
+export async function dismissDispatcherPayment(dispatcherId: string, route: RouteCode, paymentId: string) {
+  const payment = await prisma.payment.findUnique({
+    where: { id: paymentId },
+    include: { reservation: { select: { trip: { select: { route: true } } } } },
+  });
+  if (!payment) throw new AppError(404, 'PAYMENT_NOT_FOUND', 'This reservation payment was not found.');
+  if (payment.reservation.trip.route !== route) throw new AppError(403, 'ROUTE_ACCESS_DENIED', 'You can delete reservation entries only for your assigned route.');
+  if (!reviewedPaymentStatuses.includes(payment.status)) throw new AppError(409, 'PAYMENT_NOT_REVIEWED', 'Only approved or rejected reservation entries can be deleted.');
+
+  // Reuse existing per-dispatcher dismissal receipts with a separate key namespace.
+  // Never delete financial records or reservations: confirmed seats and duplicate
+  // transaction checks must continue to work after an entry is cleared.
+  const alertKey = `${paymentDismissalPrefix}${payment.id}`;
+  const dismissedAt = new Date();
+  await prisma.dispatcherAlertRead.upsert({
+    where: { userId_alertKey: { userId: dispatcherId, alertKey } },
+    update: { dismissedAt, readAt: dismissedAt },
+    create: { userId: dispatcherId, alertKey, dismissedAt, readAt: dismissedAt },
+  });
+  return getDispatcherPayments(route, dispatcherId);
 }
 
 export async function decideGcashPayment(actorUserId: string, dispatcherRoute: RouteCode, paymentId: string, decision: 'approve' | 'reject', reason: string) {
@@ -723,7 +763,7 @@ export async function decideGcashPayment(actorUserId: string, dispatcherRoute: R
     await transaction.notification.create({ data: { userId: payment.reservation.passengerId, type: NotificationType.PAYMENT, message: approved ? `${methodLabel} payment for ${payment.reservation.reference} approved. Your booking is confirmed. Bring a valid ID and your reservation reference to the terminal.` : `${methodLabel} payment for ${payment.reservation.reference} was rejected: ${reason}` } });
     await transaction.dispatchLog.create({ data: { actorUserId, action: approved ? DispatchAction.PAYMENT_APPROVED : DispatchAction.PAYMENT_REJECTED, targetId: payment.id, route: dispatcherRoute, reason: approved ? null : reason, metadata: { reservationReference: payment.reservation.reference } } });
   });
-  return getDispatcherPayments(dispatcherRoute);
+  return getDispatcherPayments(dispatcherRoute, actorUserId);
 }
 
 export async function getPaymentReceiptPath(paymentId: string, dispatcherRoute: RouteCode) {

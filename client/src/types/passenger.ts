@@ -10,6 +10,8 @@ export interface GoaTrip {
   destination: string;
   /** When passengers may begin loading into the van. */
   boardingStartTime: string;
+  /** New reservations close five hours before loading begins. */
+  reservationCutoffTime: string;
   departureTime: string;
   fare: number;
   vanId: string;
@@ -23,6 +25,15 @@ export interface GoaTrip {
 export interface TripSeat {
   number: number;
   available: boolean;
+}
+
+export interface ReservationFareQuote {
+  subtotal: number;
+  discountAmount: number;
+  totalAmount: number;
+  studentPassengers: number;
+  seniorPassengers: number;
+  regularPassengers: number;
 }
 
 export interface PassengerBooking {
@@ -39,6 +50,9 @@ export interface PassengerBooking {
   seats: number[];
   seatCount: number;
   fareAmount: number;
+  studentPassengers?: number;
+  seniorPassengers?: number;
+  discountAmount?: number;
   totalAmount: number;
   status: string;
   payment: null | {
@@ -52,6 +66,10 @@ export interface PassengerBooking {
   /** Route dispatcher's GCash account used for this reservation. */
   gcashRecipient: GcashRecipient | null;
   canReschedule: boolean;
+  rescheduleCutoffTime: string;
+  rescheduleCount: number;
+  rescheduleLimit: number;
+  reschedulesRemaining: number;
   rescheduleMessage: string;
   createdAt: string;
 }

@@ -17,15 +17,23 @@ export function RouteCards() {
 
   useEffect(() => {
     let active = true;
-    void apiRequest<PublicRoutesResponse>('/public/routes')
+    const load = () => apiRequest<PublicRoutesResponse>('/public/routes')
       .then((response) => {
-        if (active) setData(response);
+        if (active) { setData(response); setError(false); }
       })
       .catch(() => {
         if (active) setError(true);
       });
+    void load();
+    const refresh = () => { void load(); };
+    const timer = window.setInterval(refresh, 15_000);
+    window.addEventListener('focus', refresh);
+    window.addEventListener('uvgo:public-route-fare-changed', refresh);
     return () => {
       active = false;
+      window.clearInterval(timer);
+      window.removeEventListener('focus', refresh);
+      window.removeEventListener('uvgo:public-route-fare-changed', refresh);
     };
   }, []);
 
@@ -54,7 +62,7 @@ export function RouteCards() {
                 <p className="text-xs font-semibold uppercase tracking-[0.12em] text-text-secondary">Naga →</p>
                 <h3 className="mt-1 text-2xl font-black">{routeItem.name}</h3>
               </div>
-              {routeItem.fare ? <p className="text-right text-sm text-text-secondary">from <strong className="block text-2xl text-primary-dark">₱{routeItem.fare}</strong></p> : null}
+              {routeItem.fare ? <p className="text-right text-sm text-text-secondary">fare <strong className="block text-2xl text-primary-dark">₱{routeItem.fare.toLocaleString('en-PH', { minimumFractionDigits: Number.isInteger(routeItem.fare) ? 0 : 2, maximumFractionDigits: 2 })}</strong></p> : null}
             </div>
             <p className="mt-3 text-sm leading-6 text-text-secondary">{routeItem.summary}</p>
             <div className={`mt-5 grid gap-3 rounded-control bg-background p-3 text-xs ${routeItem.protocol === 'Goso' ? 'grid-cols-2' : 'grid-cols-1'}`}>
