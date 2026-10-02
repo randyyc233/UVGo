@@ -10,6 +10,7 @@ import {
   ChevronDown,
   ChevronUp,
   Ellipsis,
+  Eye,
   FileClock,
   ListOrdered,
   MapPin,
@@ -1097,9 +1098,9 @@ export function DispatcherPaymentsPage() {
       setGcash(response.payments.gcash);
       setPaypal(response.payments.paypal);
       setDeleting(null);
-      toast.success("Reservation entry deleted from your list.");
+      toast.success("Payment entry removed from your list.");
     } catch (caught) {
-      setError(caught instanceof ApiError ? caught.message : "Reservation entry could not be deleted.");
+      setError(caught instanceof ApiError ? caught.message : "Payment entry could not be removed.");
     } finally {
       setLoading(false);
     }
@@ -1161,7 +1162,7 @@ export function DispatcherPaymentsPage() {
       </Card>
       <Card className="flex items-start gap-3 p-4 text-sm leading-6 text-text-secondary">
         <ShieldCheck className="mt-1 h-4 w-4 shrink-0 text-primary" />
-        <p>Verify GCash receipts and reported PayPal payments before approving. For PayPal, check the transaction, recipient, PHP amount, completed status, and that the transaction has not already been used. SDK-captured PayPal orders are verified automatically. Delete clears approved or rejected entries from your list while keeping the passenger’s booking and payment history.</p>
+        <p>Verify GCash receipts and reported PayPal payments before approving. For PayPal, check the transaction, recipient, PHP amount, completed status, and that the transaction has not already been used. Checkout payments are confirmed automatically after capture. Delete clears reviewed payments and pending or failed PayPal checkouts from your list while keeping the passenger’s booking and payment history. A removed checkout appears again if its payment completes.</p>
       </Card>
       <ConfirmationDialog
         open={Boolean(rejecting)}
@@ -1184,7 +1185,9 @@ export function DispatcherPaymentsPage() {
       <ConfirmationDialog
         open={Boolean(deleting)}
         title={`Delete ${deleting?.reservation.reference ?? "reservation entry"}?`}
-        description="This removes the reviewed entry from your dispatcher list. The passenger’s booking, reserved seats, payment history, and dispatch logs are kept."
+        description={deleting?.method === "paypal" && deleting.paypalOrderId && ["pending", "failed"].includes(deleting.status)
+          ? "Remove this checkout from your dispatcher list? Its booking and reserved seats are kept. This does not cancel the PayPal checkout. If the payment completes later, the entry will appear again with its completed status."
+          : "This removes the reviewed entry from your dispatcher list. The passenger’s booking, reserved seats, payment history, and dispatch logs are kept."}
         confirmLabel="Delete entry"
         destructive
         loading={loading}
@@ -1336,9 +1339,10 @@ function PaymentCard({
           </div>
         </div>
       ) : payment.paypalOrderId ? (
-        <div className="mt-4 rounded-control bg-info-soft p-3 text-xs text-info">
-          <strong>Transaction ID/reference:</strong>{" "}
-          <span className="break-all">{payment.transactionReference}</span> · server checkout
+        <div className="mt-4 space-y-2 rounded-control bg-info-soft p-3 text-xs text-info">
+          <p><strong>PayPal order ID:</strong>{" "}<span className="break-all">{payment.paypalOrderId}</span></p>
+          {payment.status === "captured" && payment.transactionReference !== payment.paypalOrderId ? <p><strong>Transaction ID:</strong>{" "}<span className="break-all">{payment.transactionReference}</span></p> : null}
+          {payment.receiptUrl ? <PaymentReceipt payment={payment} imageClassName="max-h-64 w-full object-contain" /> : <p>No receipt image attached. View payment details below.</p>}
         </div>
       ) : (
         <div className="mt-4 space-y-2 rounded-control bg-cream p-3 text-sm text-text-secondary">
@@ -1354,6 +1358,8 @@ function PaymentCard({
             {label(payment.status)}
           </StatusBadge>
         </span>
+        <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:justify-end">
+        {payment.method === "paypal" ? <PaypalPaymentDetails payment={payment} /> : null}
         {(payment.method === "gcash" || !payment.paypalOrderId) &&
         payment.status === "pending_verification" ? (
           <div className="grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto">
@@ -1377,7 +1383,7 @@ function PaymentCard({
               Reject
             </Button>
           </div>
-        ) : ["verified", "captured", "rejected"].includes(payment.status) ? (
+        ) : payment.canDelete ? (
           <Button
             size="sm"
             variant="danger"
@@ -1389,9 +1395,36 @@ function PaymentCard({
             Delete
           </Button>
         ) : null}
+        </div>
       </div>
       </div>
     </article>
+  );
+}
+
+function PaypalPaymentDetails({ payment }: { payment: DispatcherPayment }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <Button size="sm" variant="outline" className="w-full sm:w-auto" leadingIcon={<Eye className="h-4 w-4" />} aria-label={`View PayPal payment ${payment.reservation.reference}`} onClick={() => setOpen(true)}>View payment details</Button>
+      <Modal open={open} title="PayPal payment details" description={`${payment.reservation.reference} · ${payment.reservation.passengerName}`} onClose={() => setOpen(false)} footer={<Button variant="ghost" onClick={() => setOpen(false)}>Close</Button>}>
+        <div className="flex items-center justify-between gap-3 rounded-control bg-cream p-3"><StatusBadge tone={tone(payment.status)}>{label(payment.status)}</StatusBadge><strong className="text-lg text-primary-dark">₱{payment.amount.toFixed(2)}</strong></div>
+        <dl className="mt-4 grid min-w-0 gap-4 text-sm sm:grid-cols-2">
+          <div><dt className="text-xs font-semibold text-text-secondary">Booking status</dt><dd className="mt-1 font-semibold">{label(payment.reservation.status)}</dd></div>
+          <div><dt className="text-xs font-semibold text-text-secondary">Contact</dt><dd className="mt-1 font-semibold">{payment.reservation.contact ?? "Not supplied"}</dd></div>
+          {payment.paypalOrderId ? <div className="sm:col-span-2"><dt className="text-xs font-semibold text-text-secondary">PayPal order ID</dt><dd className="mt-1 break-all font-semibold">{payment.paypalOrderId}</dd></div> : null}
+          {(!payment.paypalOrderId || payment.transactionReference !== payment.paypalOrderId) ? <div className="sm:col-span-2"><dt className="text-xs font-semibold text-text-secondary">Transaction ID/reference</dt><dd className="mt-1 break-all font-semibold">{payment.transactionReference ?? "Not supplied"}</dd></div> : null}
+          <div><dt className="text-xs font-semibold text-text-secondary">Created</dt><dd className="mt-1 font-semibold">{time(payment.uploadedAt)}</dd></div>
+          {payment.paypalOrderId ? <div><dt className="text-xs font-semibold text-text-secondary">Paid</dt><dd className="mt-1 font-semibold">{payment.paidAt ? time(payment.paidAt) : "No completed payment recorded"}</dd></div> : null}
+          <div><dt className="text-xs font-semibold text-text-secondary">Selected seats</dt><dd className="mt-1 font-semibold">{payment.reservation.seats.length ? payment.reservation.seats.map((seat) => `#${seat}`).join(", ") : "No seats currently assigned"}</dd></div>
+          <div><dt className="text-xs font-semibold text-text-secondary">Departure</dt><dd className="mt-1 font-semibold">{time(payment.reservation.departureTime)}</dd></div>
+          {payment.verifiedAt ? <div className="sm:col-span-2"><dt className="text-xs font-semibold text-text-secondary">Reviewed</dt><dd className="mt-1 font-semibold">{time(payment.verifiedAt)}{payment.verifiedBy ? ` · ${payment.verifiedBy}` : ""}</dd></div> : null}
+          {payment.rejectionReason ? <div className="sm:col-span-2"><dt className="text-xs font-semibold text-text-secondary">Rejection reason</dt><dd className="mt-1 break-words">{payment.rejectionReason}</dd></div> : null}
+        </dl>
+        {payment.receiptUrl ? <div className="mt-4"><PaymentReceipt payment={payment} imageClassName="max-h-64 w-full object-contain" /></div> : <p className="mt-4 rounded-control bg-cream p-3 text-sm leading-6 text-text-secondary">No receipt image was uploaded for this payment.{payment.paypalOrderId ? " This booking uses PayPal checkout; payment completion is recorded automatically after capture." : ""}</p>}
+        {payment.status === "pending" ? <p className="mt-3 text-sm leading-6 text-text-secondary">This checkout is awaiting payment completion. An order ID alone does not confirm payment.</p> : null}
+      </Modal>
+    </>
   );
 }
 

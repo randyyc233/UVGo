@@ -1706,6 +1706,18 @@ test('reservation deletion endpoint enforces authentication, role, route and rev
     assert.equal(reloaded.status, 200);
     assert.equal((await reloaded.json() as typeof payload).payments.paypal.some((payment) => payment.id === 'seed_payment_paypal'), false);
     assert.equal((await prisma.payment.findUniqueOrThrow({ where: { id: 'seed_payment_paypal' } })).status, PaymentStatus.CAPTURED);
+
+    // An unfinished checkout can be removed from the list without cancelling
+    // the underlying reservation or relaxing route checks.
+    await prisma.payment.update({ where: { id: 'seed_payment_paypal' }, data: { status: PaymentStatus.PENDING } });
+    const pendingPayment = await prisma.payment.findUniqueOrThrow({ where: { id: 'seed_payment_paypal' } });
+    assert.equal((await remove('seed_payment_paypal', await cookie('dispatcher.legazpi@uvgo.demo'))).status, 403);
+    assert.equal((await remove('seed_payment_paypal', goaCookie)).status, 200);
+    assert.deepEqual(await prisma.payment.findUniqueOrThrow({ where: { id: 'seed_payment_paypal' } }), pendingPayment);
+    assert.equal((await fetch(base.replace('/payments', '/dashboard'), { headers: { Cookie: goaCookie } })).status, 200);
+    assert.equal((await (await fetch(base, { headers: { Cookie: goaCookie } })).json() as typeof payload).payments.paypal.some((payment) => payment.id === 'seed_payment_paypal'), false);
+    await prisma.payment.update({ where: { id: 'seed_payment_paypal' }, data: { status: PaymentStatus.FAILED } });
+    assert.equal((await remove('seed_payment_paypal', goaCookie)).status, 200);
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }

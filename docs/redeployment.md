@@ -4,6 +4,8 @@ Deploy the `main` branch using the existing root `Dockerfile` and the existing M
 
 The dispatcher follow-up fixes reviewed payments and departure history reappearing after deletion: dashboard alert cleanup now preserves those saved list dismissals. It also puts mobile driver actions in a three-dot menu. This follow-up needs no additional database migration. If a previously removed entry has already reappeared, delete it again after deploying this version; the earlier cleanup erased its dismissal receipt.
 
+PayPal cards now include a payment-details viewer and allow pending/failed checkout entries to be removed from the dispatcher list. Checkout removal retains the payment, reservation, and seats, and a later completed capture reappears for review. Checkout cards distinguish order IDs from captured transaction IDs and explain when no receipt image was uploaded. These changes also need no additional migration.
+
 ## Build and startup
 
 The Docker build installs the lockfile dependencies with `npm ci`, builds the React client and TypeScript server, and generates Prisma Client. Startup runs `prisma migrate deploy` before launching the API. This release adds three migrations:
@@ -45,13 +47,15 @@ The test runner uses its own temporary database and receipt directory. It requir
 
 After the deployment reports healthy, check the public homepage and route filters, passenger and dispatcher direct-page refreshes, and role sign-in. Confirm payment photos open when clicked, reviewed payments can be removed from the dispatcher's list and stay removed after dashboard refreshes, public Goa fares can be edited in Profile, and mobile schedule/queue layouts render correctly. Confirm Departure History appears as a separate navigation item for both routes and supports daily filtering and its three-dot deletion menu, with deletions surviving dashboard refreshes. On mobile Drivers & Vehicles, confirm the three-dot menu opens the existing Edit, Reset password, and Delete dialogs.
 
+For PayPal, confirm View payment details works on pending and captured checkouts at desktop and phone widths. Removing a pending checkout must retain the passenger's booking and seats; a subsequent completed capture must bring that entry back with its transaction ID. This list action does not cancel a checkout or release seats.
+
 In passenger booking, confirm schedule cards display the five-hour reservation cutoff. Booking details must show the reschedule deadline and remaining attempts. For 10:00 AM loading, both actions close at 5:00 AM; the fourth successful-reschedule request is rejected. Existing payments remain verifiable after the cutoff. Exercise booking, rescheduling and payment submissions only with deliberately chosen test data or a real passenger workflow. Use Sandbox buyer accounts for PayPal checks.
 
 Do not run `demo:reset` or seed the database as part of a routine redeployment. Keep the existing database, bookings, accounts, queue plans, and receipt storage. This source update does not substitute for real-device GPS field validation.
 
 ## Verification recorded on October 2, 2026
 
-- Full integration suite after the dispatcher follow-up: 166 passed, zero failed, two non-demo checks skipped in the default run.
+- Full integration suite after the dispatcher follow-ups: 167 passed, zero failed, two non-demo checks skipped in the default run.
 - Separate non-demo check run: both checks passed.
 - Client and server TypeScript checks and ESLint: passed.
 - Complete `npm run build`: passed, including the React production bundle, Prisma Client generation, and server compilation.
@@ -60,5 +64,6 @@ Do not run `demo:reset` or seed the database as part of a routine redeployment. 
 - Mobile booking details displayed the five-hour reschedule deadline and remaining attempts. Boundary, concurrency, payment preservation, notification deletion, and automatic reallocation checks passed.
 - Payment deletion regressions reproduced the dashboard-cleanup bug before the fix and passed afterward. HTTP deletion followed by a dashboard refresh and payment reload preserves dismissal; departure history also stays removed for both routes. Expired dashboard alerts still clear normally.
 - Mobile driver actions were checked at 320px and 390px widths with no horizontal overflow. Each menu option opens its existing dialog; outside taps and Escape close the menu. Desktop action buttons remain available.
+- PayPal checkout removal passed persistence, route restriction, idempotency, booking/seat preservation, and capture-after-removal checks. The new details viewer opened both reported pending entries and displayed their stored order data, with no horizontal overflow at 320px and 390px.
 
 These are local release checks. The Dockerfile was reviewed; Docker is unavailable on this host, so a container image build and remote Coolify redeployment were not executed. Verify the persistent storage mount, PayPal runtime credentials, migration completion, and deployment health in the hosting environment.

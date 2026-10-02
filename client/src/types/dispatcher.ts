@@ -112,9 +112,11 @@ export interface DispatcherPayment {
   gcashReference: string | null;
   /** PayPal transaction/order ID or the GCash receipt reference. */
   transactionReference: string | null;
+  canDelete: boolean;
   receiptAvailable: boolean;
   receiptUrl: string | null;
   uploadedAt: string;
+  paidAt: string | null;
   verifiedAt: string | null;
   verifiedBy: string | null;
   rejectionReason: string | null;

@@ -672,6 +672,15 @@ const paymentInclude = {
   verifiedBy: { select: { name: true } },
 } as const;
 
+const paymentDismissalPrefix = 'payment-list:';
+const checkoutDismissalPrefix = 'payment-checkout-list:';
+const reviewedPaymentStatuses: PaymentStatus[] = [PaymentStatus.VERIFIED, PaymentStatus.CAPTURED, PaymentStatus.REJECTED];
+const removableCheckoutStatuses: PaymentStatus[] = [PaymentStatus.PENDING, PaymentStatus.FAILED];
+
+function isRemovablePaypalCheckout(payment: { method: PaymentMethod; paypalOrderId: string | null; status: PaymentStatus }) {
+  return payment.method === PaymentMethod.PAYPAL && Boolean(payment.paypalOrderId) && removableCheckoutStatuses.includes(payment.status);
+}
+
 function serializePayment(payment: Awaited<ReturnType<typeof prisma.payment.findMany<{ include: typeof paymentInclude }>>>[number]) {
   const receiptAvailable = Boolean(payment.receiptImageKey && existsSync(resolve(receiptDirectory, payment.receiptImageKey)));
   return {
@@ -681,10 +690,13 @@ function serializePayment(payment: Awaited<ReturnType<typeof prisma.payment.find
     amount: Number(payment.amount),
     paypalOrderId: payment.paypalOrderId,
     gcashReference: payment.gcashReference,
-    transactionReference: payment.paypalOrderId ?? payment.gcashReference,
+    transactionReference: (payment.method === PaymentMethod.PAYPAL && payment.status === PaymentStatus.CAPTURED ? payment.externalReferenceKey?.replace(/^PAYPAL:/, '') : null)
+      ?? payment.paypalOrderId ?? payment.gcashReference,
+    canDelete: reviewedPaymentStatuses.includes(payment.status) || isRemovablePaypalCheckout(payment),
     receiptAvailable,
     receiptUrl: receiptAvailable ? `/api/dispatcher/payments/${payment.id}/receipt` : null,
     uploadedAt: payment.createdAt.toISOString(),
+    paidAt: payment.paidAt?.toISOString() ?? null,
     verifiedAt: payment.verifiedAt?.toISOString() ?? null,
     verifiedBy: payment.verifiedBy?.name ?? null,
     rejectionReason: payment.rejectionReason,
@@ -703,19 +715,20 @@ function serializePayment(payment: Awaited<ReturnType<typeof prisma.payment.find
   };
 }
 
-const paymentDismissalPrefix = 'payment-list:';
-const reviewedPaymentStatuses: PaymentStatus[] = [PaymentStatus.VERIFIED, PaymentStatus.CAPTURED, PaymentStatus.REJECTED];
-
 export async function getDispatcherPayments(route: RouteCode, dispatcherId?: string) {
   const dismissed = dispatcherId ? await prisma.dispatcherAlertRead.findMany({
-    where: { userId: dispatcherId, alertKey: { startsWith: paymentDismissalPrefix }, dismissedAt: { not: null } },
+    where: { userId: dispatcherId, OR: [{ alertKey: { startsWith: paymentDismissalPrefix } }, { alertKey: { startsWith: checkoutDismissalPrefix } }], dismissedAt: { not: null } },
     select: { alertKey: true },
   }) : [];
-  const dismissedIds = dismissed.map((receipt) => receipt.alertKey.slice(paymentDismissalPrefix.length));
+  const dismissedIds = dismissed.filter((receipt) => receipt.alertKey.startsWith(paymentDismissalPrefix)).map((receipt) => receipt.alertKey.slice(paymentDismissalPrefix.length));
+  const dismissedCheckoutIds = dismissed.filter((receipt) => receipt.alertKey.startsWith(checkoutDismissalPrefix)).map((receipt) => receipt.alertKey.slice(checkoutDismissalPrefix.length));
   const payments = await prisma.payment.findMany({
     where: {
       reservation: { trip: { route } },
-      NOT: { id: { in: dismissedIds }, status: { in: reviewedPaymentStatuses } },
+      NOT: [
+        { id: { in: dismissedIds }, status: { in: reviewedPaymentStatuses } },
+        { id: { in: dismissedCheckoutIds }, method: PaymentMethod.PAYPAL, paypalOrderId: { not: null }, status: { in: removableCheckoutStatuses } },
+      ],
     },
     orderBy: { createdAt: 'desc' },
     include: paymentInclude,
@@ -730,12 +743,15 @@ export async function dismissDispatcherPayment(dispatcherId: string, route: Rout
   });
   if (!payment) throw new AppError(404, 'PAYMENT_NOT_FOUND', 'This reservation payment was not found.');
   if (payment.reservation.trip.route !== route) throw new AppError(403, 'ROUTE_ACCESS_DENIED', 'You can delete reservation entries only for your assigned route.');
-  if (!reviewedPaymentStatuses.includes(payment.status)) throw new AppError(409, 'PAYMENT_NOT_REVIEWED', 'Only approved or rejected reservation entries can be deleted.');
+  const checkout = isRemovablePaypalCheckout(payment);
+  if (!reviewedPaymentStatuses.includes(payment.status) && !checkout) throw new AppError(409, 'PAYMENT_NOT_REVIEWED', 'Only reviewed payments or pending/failed PayPal checkout entries can be removed.');
 
   // Reuse existing per-dispatcher dismissal receipts with a separate key namespace.
   // Never delete financial records or reservations: confirmed seats and duplicate
   // transaction checks must continue to work after an entry is cleared.
-  const alertKey = `${paymentDismissalPrefix}${payment.id}`;
+  // Checkout dismissal applies only while pending/failed. A later completed
+  // capture must reappear so the dispatcher can see the newly paid booking.
+  const alertKey = `${checkout ? checkoutDismissalPrefix : paymentDismissalPrefix}${payment.id}`;
   const dismissedAt = new Date();
   await prisma.dispatcherAlertRead.upsert({
     where: { userId_alertKey: { userId: dispatcherId, alertKey } },

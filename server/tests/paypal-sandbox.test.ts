@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { after, afterEach, beforeEach, mock, test } from 'node:test';
-import { PaymentStatus, ReservationStatus } from '@prisma/client';
+import { PaymentStatus, ReservationStatus, RouteCode } from '@prisma/client';
 import { app } from '../src/app.js';
 import { env } from '../src/config/env.js';
 import { prisma } from '../src/lib/prisma.js';
@@ -8,6 +8,7 @@ import { disconnectSeedClient, resetDemoData } from '../prisma/seed.js';
 import { capturePaypalReservation, createPaypalReservation, getTripSeats, releasePaypalReservation } from '../src/services/passengerService.js';
 import { getPayPalCheckoutConfig } from '../src/services/paypalService.js';
 import { AppError } from '../src/utils/AppError.js';
+import { dismissDispatcherPayment, getDispatcherDashboard, getDispatcherPayments } from '../src/services/dispatcherService.js';
 
 if (!process.env.UVGO_ISOLATED_TEST_DATABASE || new URL(env.DATABASE_URL).pathname !== `/${process.env.UVGO_ISOLATED_TEST_DATABASE}`) {
   throw new Error('Run PayPal tests through the isolated database test runner.');
@@ -81,6 +82,50 @@ test('Sandbox PayPal: completed capture confirms once, stores its transaction id
   assert.equal(captureRequests.length, 1);
   assert.equal(captureRequests[0]?.requestId, `${order.reference}-capture`);
   assert.equal(await prisma.notification.count({ where: { userId: input.passengerId, message: { contains: order.reference } } }), 1);
+});
+
+test('Sandbox PayPal: pending checkout removal preserves payment and seats, and completed capture reappears with details', async () => {
+  const order = await startOrder();
+  const payment = await prisma.payment.findFirstOrThrow({ where: { paypalOrderId: order.orderId } });
+  const dispatcher = 'seed_user_dispatcher';
+  const listed = (await getDispatcherPayments(RouteCode.GOA, dispatcher)).paypal.find((item) => item.id === payment.id)!;
+  assert.equal(listed.status, 'pending');
+  assert.equal(listed.canDelete, true);
+  assert.equal(listed.receiptUrl, null);
+  assert.equal(listed.paidAt, null);
+  const snapshot = async () => ({
+    payment: await prisma.payment.findUniqueOrThrow({ where: { id: payment.id } }),
+    reservation: await prisma.reservation.findUniqueOrThrow({ where: { id: payment.reservationId }, include: { seats: true } }),
+    notifications: await prisma.notification.findMany({ orderBy: { id: 'asc' } }),
+    logs: await prisma.dispatchLog.findMany({ orderBy: { id: 'asc' } }),
+  });
+  const before = await snapshot();
+  const removed = await dismissDispatcherPayment(dispatcher, RouteCode.GOA, payment.id);
+  assert.equal(removed.paypal.some((item) => item.id === payment.id), false);
+  await dismissDispatcherPayment(dispatcher, RouteCode.GOA, payment.id);
+  assert.deepEqual(await snapshot(), before);
+  assert.equal(captureRequests.length, 0);
+  await getDispatcherDashboard(RouteCode.GOA, dispatcher);
+  assert.equal((await getDispatcherPayments(RouteCode.GOA, dispatcher)).paypal.some((item) => item.id === payment.id), false);
+  const backup = await prisma.user.create({ data: { name: 'Checkout backup', email: 'checkout-backup@uvgo.test', passwordHash: 'unused', role: 'DISPATCHER', dispatcherRoute: RouteCode.GOA } });
+  assert.equal((await getDispatcherPayments(RouteCode.GOA, backup.id)).paypal.some((item) => item.id === payment.id), true);
+
+  approve(order.orderId);
+  const booking = await capturePaypalReservation(input.passengerId, order.reference);
+  assert.equal(booking.status, 'confirmed');
+  assert.deepEqual(booking.seats, input.seats);
+  const captured = (await getDispatcherPayments(RouteCode.GOA, dispatcher)).paypal.find((item) => item.id === payment.id)!;
+  assert.equal(captured.status, 'captured');
+  assert.equal(captured.canDelete, true);
+  assert.equal(captured.paypalOrderId, order.orderId);
+  assert.equal(captured.transactionReference, `CAPTURE-${order.orderId}`);
+  assert.ok(captured.paidAt);
+  const paidBefore = await snapshot();
+  await dismissDispatcherPayment(dispatcher, RouteCode.GOA, payment.id);
+  await getDispatcherDashboard(RouteCode.GOA, dispatcher);
+  assert.equal((await getDispatcherPayments(RouteCode.GOA, dispatcher)).paypal.some((item) => item.id === payment.id), false);
+  assert.deepEqual(await snapshot(), paidBefore);
+  assert.equal(captureRequests.length, 1);
 });
 
 test('Reservation cutoff: PayPal checkout created earlier can still complete after reservations close', async () => {
