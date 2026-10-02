@@ -21,7 +21,6 @@ import {
   Route,
   RefreshCw,
   Send,
-  ShieldCheck,
   Trash2,
   UserRound,
   UserRoundCog,
@@ -1159,10 +1158,6 @@ export function DispatcherPaymentsPage() {
             )}
           </div>
         )}
-      </Card>
-      <Card className="flex items-start gap-3 p-4 text-sm leading-6 text-text-secondary">
-        <ShieldCheck className="mt-1 h-4 w-4 shrink-0 text-primary" />
-        <p>Verify GCash receipts and reported PayPal payments before approving. For PayPal, check the transaction, recipient, PHP amount, completed status, and that the transaction has not already been used. Checkout payments are confirmed automatically after capture. Delete clears reviewed payments and pending or failed PayPal checkouts from your list while keeping the passenger’s booking and payment history. A removed checkout appears again if its payment completes.</p>
       </Card>
       <ConfirmationDialog
         open={Boolean(rejecting)}
