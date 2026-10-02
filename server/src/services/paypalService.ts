@@ -89,7 +89,12 @@ export async function createPayPalOrder(reference: string, amount: number) {
   const token = await getAccessToken();
   const response = await fetch(`${sandboxUrl}/v2/checkout/orders`, {
     method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'PayPal-Request-Id': reference },
-    body: JSON.stringify({ intent: 'CAPTURE', purchase_units: [{ reference_id: reference, amount: { currency_code: 'PHP', value: amount.toFixed(2) } }] }),
+    body: JSON.stringify({
+      intent: 'CAPTURE',
+      purchase_units: [{ reference_id: reference, amount: { currency_code: 'PHP', value: amount.toFixed(2) } }],
+      // Transport reservations do not require a delivery address.
+      payment_source: { paypal: { experience_context: { shipping_preference: 'NO_SHIPPING' } } },
+    }),
     signal: AbortSignal.timeout(15_000),
   });
   if (!response.ok) throw new AppError(502, 'PAYPAL_ORDER_FAILED', 'PayPal could not create the Sandbox order.');

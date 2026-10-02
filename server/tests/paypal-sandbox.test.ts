@@ -28,17 +28,19 @@ let loseCaptureResponse = false;
 let tokenFailure = false;
 let captureStarted: (() => void) | null = null;
 let captureDelay = 0;
+let createRequests: Array<{ intent: string; purchase_units: ProviderOrder['purchase_units']; payment_source?: { paypal?: { experience_context?: { shipping_preference?: string } } } }> = [];
 
 beforeEach(async () => {
   await resetDemoData();
   env.PAYPAL_CLIENT_ID = 'test-sandbox-client'; env.PAYPAL_CLIENT_SECRET = 'test-server-secret'; env.PAYPAL_BASE_URL = 'https://api-m.sandbox.paypal.com';
-  orders = new Map(); captureRequests = []; captureStatus = 'COMPLETED'; corruptCapture = null; loseCaptureResponse = false; tokenFailure = false; captureStarted = null; captureDelay = 0;
+  orders = new Map(); captureRequests = []; createRequests = []; captureStatus = 'COMPLETED'; corruptCapture = null; loseCaptureResponse = false; tokenFailure = false; captureStarted = null; captureDelay = 0;
   mock.method(globalThis, 'fetch', async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
     const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input : input.url);
     if (url.origin !== 'https://api-m.sandbox.paypal.com') return realFetch(input, init);
     if (url.pathname === '/v1/oauth2/token') return Response.json(tokenFailure ? { error: 'invalid_client' } : { access_token: 'test-token' }, { status: tokenFailure ? 401 : 200 });
     if (url.pathname === '/v2/checkout/orders') {
-      const body = JSON.parse(String(init?.body)) as { purchase_units: ProviderOrder['purchase_units'] };
+      const body = JSON.parse(String(init?.body)) as typeof createRequests[number];
+      createRequests.push(body);
       const id = `ORDER-${orders.size + 1}`;
       const order: ProviderOrder = { id, status: 'CREATED', intent: 'CAPTURE', purchase_units: [{ ...body.purchase_units[0]!, payee: { merchant_id: 'UVGO-MERCHANT' } }] };
       orders.set(id, order);
@@ -82,6 +84,27 @@ test('Sandbox PayPal: completed capture confirms once, stores its transaction id
   assert.equal(captureRequests.length, 1);
   assert.equal(captureRequests[0]?.requestId, `${order.reference}-capture`);
   assert.equal(await prisma.notification.count({ where: { userId: input.passengerId, message: { contains: order.reference } } }), 1);
+});
+
+test('Sandbox PayPal: transport checkout hides shipping without changing the stored fare or reservation reference', async () => {
+  const order = await startOrder();
+  assert.equal(createRequests.length, 1);
+  const request = createRequests[0]!;
+  const payment = await prisma.payment.findFirstOrThrow({ where: { paypalOrderId: order.orderId } });
+  assert.equal(request.payment_source?.paypal?.experience_context?.shipping_preference, 'NO_SHIPPING');
+  assert.equal(request.intent, 'CAPTURE');
+  assert.equal(request.purchase_units.length, 1);
+  assert.equal(request.purchase_units[0]!.reference_id, order.reference);
+  assert.deepEqual(request.purchase_units[0]!.amount, { currency_code: 'PHP', value: Number(payment.amount).toFixed(2) });
+  assert.equal('shipping' in request.purchase_units[0]!, false);
+  assert.equal(payment.status, PaymentStatus.PENDING);
+  assert.equal(captureRequests.length, 0);
+  approve(order.orderId);
+  const booking = await capturePaypalReservation(input.passengerId, order.reference);
+  assert.equal(booking.payment?.status, 'captured');
+  assert.equal(booking.status, 'confirmed');
+  assert.deepEqual(booking.seats, input.seats);
+  assert.equal(captureRequests.length, 1);
 });
 
 test('Sandbox PayPal: pending checkout removal preserves payment and seats, and completed capture reappears with details', async () => {

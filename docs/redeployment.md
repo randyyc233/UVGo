@@ -26,6 +26,8 @@ New PayPal checkouts require runtime `PAYPAL_CLIENT_ID` and `PAYPAL_CLIENT_SECRE
 
 The production HTML supplies a fresh CSP nonce to the PayPal SDK. Keep the application's CSP headers and HTTPS configuration. No new frontend build argument is needed for PayPal.
 
+New PayPal orders set `payment_source.paypal.experience_context.shipping_preference=NO_SHIPPING`, since transport reservations have no delivery address. This hides shipping address selection in PayPal checkout; existing orders keep their original checkout settings. No new environment variable or migration is required.
+
 ## Receipt persistence
 
 Mount persistent storage at `/app/uploads/receipts` and set `UPLOAD_DIR=/app/uploads/receipts`. The container runs as the `node` user, so the mounted directory must be writable by that user. Existing GCash and PayPal receipts must survive container replacement. Confirm the storage mount is present before redeployment; a Docker `VOLUME` declaration alone does not identify a reusable host volume.
@@ -55,7 +57,7 @@ Do not run `demo:reset` or seed the database as part of a routine redeployment. 
 
 ## Verification recorded on October 2, 2026
 
-- Full integration suite after the dispatcher follow-ups: 167 passed, zero failed, two non-demo checks skipped in the default run.
+- Last full integration suite, before the shipping-preference follow-up: 167 passed, zero failed, two non-demo checks skipped in the default run.
 - Separate non-demo check run: both checks passed.
 - Client and server TypeScript checks and ESLint: passed.
 - Complete `npm run build`: passed, including the React production bundle, Prisma Client generation, and server compilation.
@@ -65,5 +67,6 @@ Do not run `demo:reset` or seed the database as part of a routine redeployment. 
 - Payment deletion regressions reproduced the dashboard-cleanup bug before the fix and passed afterward. HTTP deletion followed by a dashboard refresh and payment reload preserves dismissal; departure history also stays removed for both routes. Expired dashboard alerts still clear normally.
 - Mobile driver actions were checked at 320px and 390px widths with no horizontal overflow. Each menu option opens its existing dialog; outside taps and Escape close the menu. Desktop action buttons remain available.
 - PayPal checkout removal passed persistence, route restriction, idempotency, booking/seat preservation, and capture-after-removal checks. The new details viewer opened both reported pending entries and displayed their stored order data, with no horizontal overflow at 320px and 390px.
+- Shipping-preference follow-up: the focused PayPal regression run passed all 20 checks, including creation with `NO_SHIPPING`, stored fare/reference preservation, capture, cancellation, ownership, and duplicate-charge protection. The actual Sandbox API accepted an uncaptured test order with the new setting. Server TypeScript and ESLint checks passed.
 
 These are local release checks. The Dockerfile was reviewed; Docker is unavailable on this host, so a container image build and remote Coolify redeployment were not executed. Verify the persistent storage mount, PayPal runtime credentials, migration completion, and deployment health in the hosting environment.
