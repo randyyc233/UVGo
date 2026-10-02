@@ -1630,6 +1630,10 @@ test('reviewed reservation deletion persists without changing bookings, seats, p
   assert.equal(deleted.gcash.some((payment) => payment.id === 'seed_payment_gcash'), false);
   await dismissDispatcherPayment('seed_user_dispatcher', RouteCode.GOA, 'seed_payment_paypal');
   await dismissDispatcherPayment('seed_user_dispatcher', RouteCode.GOA, 'seed_payment_gcash');
+  // The shell polls the dashboard while other dispatcher pages are open.
+  // That refresh must never clear the receipts used to hide reviewed payments.
+  await getDispatcherDashboard(RouteCode.GOA, 'seed_user_dispatcher');
+  await dismissAllDispatcherAlerts('seed_user_dispatcher', RouteCode.GOA);
   const reloaded = await getDispatcherPayments(RouteCode.GOA, 'seed_user_dispatcher');
   assert.equal(reloaded.gcash.some((payment) => payment.id === 'seed_payment_gcash'), false);
   assert.equal(reloaded.paypal.some((payment) => payment.id === 'seed_payment_paypal'), false);
@@ -1660,6 +1664,19 @@ test('rejected reservation deletion keeps the rejection reason and duplicate tra
   assert.equal(afterDecision.gcash.some((item) => item.id === payment.id), false);
 });
 
+test('dashboard cleanup still removes expired alerts when no alerts remain, preserving payment deletions', async () => {
+  await decideGcashPayment('seed_user_dispatcher', RouteCode.GOA, 'seed_payment_gcash', 'approve', '');
+  await dismissDispatcherPayment('seed_user_dispatcher', RouteCode.GOA, 'seed_payment_gcash');
+  await prisma.vehicle.update({ where: { id: 'seed_vehicle_021' }, data: { status: VehicleStatus.DELAYED } });
+  await markDispatcherAlertRead('seed_user_dispatcher', RouteCode.GOA, 'vehicle-seed_vehicle_021');
+  await prisma.vehicle.update({ where: { id: 'seed_vehicle_021' }, data: { status: VehicleStatus.AT_TERMINAL } });
+  const dashboard = await getDispatcherDashboard(RouteCode.GOA, 'seed_user_dispatcher');
+  assert.equal(dashboard.alerts.length, 0);
+  assert.equal(await prisma.dispatcherAlertRead.count({ where: { userId: 'seed_user_dispatcher', alertKey: 'vehicle-seed_vehicle_021' } }), 0);
+  assert.equal(await prisma.dispatcherAlertRead.count({ where: { userId: 'seed_user_dispatcher', alertKey: 'payment-list:seed_payment_gcash', dismissedAt: { not: null } } }), 1);
+  assert.equal((await getDispatcherPayments(RouteCode.GOA, 'seed_user_dispatcher')).gcash.some((payment) => payment.id === 'seed_payment_gcash'), false);
+});
+
 test('reservation deletion endpoint enforces authentication, role, route and reviewed status', async () => {
   const server = app.listen(0);
   try {
@@ -1683,6 +1700,8 @@ test('reservation deletion endpoint enforces authentication, role, route and rev
     assert.equal(deleted.status, 200);
     const payload = await deleted.json() as { payments: { paypal: Array<{ id: string }> } };
     assert.equal(payload.payments.paypal.some((payment) => payment.id === 'seed_payment_paypal'), false);
+    const dashboard = await fetch(base.replace('/payments', '/dashboard'), { headers: { Cookie: goaCookie } });
+    assert.equal(dashboard.status, 200);
     const reloaded = await fetch(base, { headers: { Cookie: goaCookie } });
     assert.equal(reloaded.status, 200);
     assert.equal((await reloaded.json() as typeof payload).payments.paypal.some((payment) => payment.id === 'seed_payment_paypal'), false);
@@ -3763,6 +3782,7 @@ for (const [route, dispatcherId, tripId] of [
     await dismissDepartureHistory(dispatcherId, route, tripId);
     await dismissDepartureHistory(dispatcherId, route, tripId); // Repeated deletion remains safe.
     assert.deepEqual(await snapshot(), before);
+    await getDispatcherDashboard(route, dispatcherId);
     assert.equal((await getDepartureHistory(dispatcherId, route, '2026-10-02')).departures.length, 0);
     assert.equal(await prisma.dispatcherAlertRead.count({ where: { userId: dispatcherId, alertKey: `departure-history:${tripId}` } }), 1);
     // History dismissal is per dispatcher; another account retains the entry.

@@ -236,7 +236,15 @@ export async function getDispatcherDashboard(route: RouteCode, dispatcherId: str
     prisma.dispatcherAlertRead.deleteMany({
       where: {
         userId: dispatcherId,
-        ...(allAlertKeys.length ? { alertKey: { notIn: allAlertKeys } } : {}),
+        // This table also stores durable payment-list and departure-history
+        // dismissals. Prune only expired dashboard alerts, even when no alerts
+        // are active, so polling cannot make deleted list entries reappear.
+        OR: [
+          { alertKey: { startsWith: 'replacement-' } },
+          { alertKey: { startsWith: 'vehicle-' } },
+          { alertKey: 'pending-payments' },
+        ],
+        alertKey: { notIn: allAlertKeys },
       },
     }),
   ]);

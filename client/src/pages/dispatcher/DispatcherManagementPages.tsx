@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import {
   BusFront,
   CalendarClock,
   CalendarDays,
   ChevronDown,
   ChevronUp,
+  Ellipsis,
   KeyRound,
   Pencil,
   Pause,
@@ -156,6 +157,55 @@ function DriverFormFields({ form, editing, errors, onChange }: { form: DriverFor
           <option value="active">Active</option>
           <option value="inactive">Inactive</option>
         </Select>
+      ) : null}
+    </div>
+  );
+}
+
+function MobileDriverActions({ driver, edit, resetPassword, remove }: {
+  driver: ManagedDriver;
+  edit: () => void;
+  resetPassword: () => void;
+  remove: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const actionsId = useId();
+  const container = useRef<HTMLDivElement>(null);
+  const trigger = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    function closeOutside(event: PointerEvent) {
+      if (event.target instanceof Node && !container.current?.contains(event.target)) setOpen(false);
+    }
+    function closeOnEscape(event: KeyboardEvent) {
+      if (event.key === 'Escape') { setOpen(false); trigger.current?.focus(); }
+    }
+    document.addEventListener('pointerdown', closeOutside);
+    document.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.removeEventListener('pointerdown', closeOutside);
+      document.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [open]);
+
+  function select(action: () => void) {
+    setOpen(false);
+    trigger.current?.focus();
+    action();
+  }
+
+  return (
+    <div ref={container} className="relative shrink-0 sm:hidden" onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) setOpen(false); }}>
+      <button ref={trigger} type="button" aria-label={`Actions for ${driver.name}`} aria-expanded={open} aria-controls={actionsId} className="flex min-h-touch w-11 items-center justify-center rounded-control border border-border text-text-secondary hover:bg-cream focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary" onClick={() => setOpen((value) => !value)}>
+        <Ellipsis className="h-5 w-5" aria-hidden="true" />
+      </button>
+      {open ? (
+        <div id={actionsId} className="absolute right-0 z-30 mt-1 w-48 rounded-control border border-border bg-surface p-1 shadow-floating">
+          <button type="button" className="flex min-h-touch w-full items-center gap-2 rounded-control px-3 text-left text-sm font-semibold hover:bg-cream focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary" onClick={() => select(edit)}><Pencil className="h-4 w-4" aria-hidden="true" />Edit</button>
+          <button type="button" className="flex min-h-touch w-full items-center gap-2 rounded-control px-3 text-left text-sm font-semibold hover:bg-cream focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary" onClick={() => select(resetPassword)}><KeyRound className="h-4 w-4" aria-hidden="true" />Reset password</button>
+          <button type="button" className="flex min-h-touch w-full items-center gap-2 rounded-control px-3 text-left text-sm font-semibold text-danger hover:bg-danger-soft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-danger" onClick={() => select(remove)}><Trash2 className="h-4 w-4" aria-hidden="true" />Delete</button>
+        </div>
       ) : null}
     </div>
   );
@@ -314,10 +364,17 @@ export function DispatcherDriversPage() {
       {error ? <p role="alert" className="rounded-control bg-danger-soft p-3 text-sm text-danger">{error}</p> : null}
       <div className="grid gap-4 xl:grid-cols-2">
         {data.drivers.map((driver) => (
-          <Card key={driver.id} className="p-5">
-            <div className="flex items-start justify-between gap-3"><div className="flex gap-3"><span className="flex h-11 w-11 items-center justify-center rounded-full bg-primary-soft text-primary"><UserRoundCog className="h-5 w-5" /></span><div><h3 className="font-extrabold">{driver.name}</h3><p className="text-sm text-text-secondary">{driver.email}</p><p className="text-xs text-text-muted">{driver.contact}</p></div></div><StatusBadge tone={driver.isActive ? 'success' : 'neutral'}>{driver.isActive ? 'Active' : 'Inactive'}</StatusBadge></div>
+          <Card key={driver.id} className="min-w-0 p-3 sm:p-5">
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex min-w-0 flex-1 gap-3">
+                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary-soft text-primary sm:h-11 sm:w-11"><UserRoundCog className="h-5 w-5" /></span>
+                <div className="min-w-0"><h3 className="break-words font-extrabold">{driver.name}</h3><p className="break-all text-sm text-text-secondary">{driver.email}</p><p className="text-xs text-text-muted">{driver.contact}</p><div className="mt-2 sm:hidden"><StatusBadge tone={driver.isActive ? 'success' : 'neutral'}>{driver.isActive ? 'Active' : 'Inactive'}</StatusBadge></div></div>
+              </div>
+              <div className="hidden shrink-0 sm:block"><StatusBadge tone={driver.isActive ? 'success' : 'neutral'}>{driver.isActive ? 'Active' : 'Inactive'}</StatusBadge></div>
+              <MobileDriverActions driver={driver} edit={() => openEdit(driver)} resetPassword={() => { setPassword(''); setPasswordDriver(driver); }} remove={() => setDeletingDriver(driver)} />
+            </div>
             <div className="mt-4 grid grid-cols-3 gap-2 rounded-control bg-cream p-3 text-sm"><div><p className="text-xs text-text-secondary">Van</p><p className="font-bold">{driver.vehicle?.vanId ?? 'Unassigned'}</p></div><div><p className="text-xs text-text-secondary">Plate</p><p className="font-bold">{driver.vehicle?.plateNo ?? '—'}</p></div><div><p className="text-xs text-text-secondary">Seat capacity</p><p className="font-bold">{driver.vehicle ? `${driver.vehicle.capacity} seats` : '—'}</p></div></div>
-            <div className="dashboard-actions mt-4"><Button size="sm" variant="outline" onClick={() => openEdit(driver)} leadingIcon={<Pencil className="h-4 w-4" />}>Edit</Button><Button size="sm" variant="ghost" onClick={() => { setPassword(''); setPasswordDriver(driver); }} leadingIcon={<KeyRound className="h-4 w-4" />}>Reset password</Button><Button size="sm" variant="danger" onClick={() => setDeletingDriver(driver)} leadingIcon={<Trash2 className="h-4 w-4" />}>Delete</Button></div>
+            <div className="hidden sm:block"><div className="dashboard-actions mt-4"><Button size="sm" variant="outline" onClick={() => openEdit(driver)} leadingIcon={<Pencil className="h-4 w-4" />}>Edit</Button><Button size="sm" variant="ghost" onClick={() => { setPassword(''); setPasswordDriver(driver); }} leadingIcon={<KeyRound className="h-4 w-4" />}>Reset password</Button><Button size="sm" variant="danger" onClick={() => setDeletingDriver(driver)} leadingIcon={<Trash2 className="h-4 w-4" />}>Delete</Button></div></div>
           </Card>
         ))}
       </div>
