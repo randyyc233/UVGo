@@ -10,6 +10,8 @@ The October 4 Taya update retains daily and weekly driver assignments and orders
 
 The fleet event lists now display 100-meter terminal and 5 km Active Zone entry/exit labels in both desktop and mobile views. Legazpi terminal arrival times come from existing confirmation logs. The map observes 100-meter exits on the client while it is open, using the existing terminal status and GPS updates. These client exit entries are temporary, clear on reload, and are not saved as server records.
 
+The October 4 build follow-up addresses `Cannot find module '../lightningcss.linux-x64-musl.node'` during Vite CSS minification in the Alpine container. The client explicitly uses esbuild for CSS minification and declares its build dependency. The Docker base image, server startup, database migrations, and application behavior are unchanged. Redeploy the latest `main` commit; no additional migration or environment setting is required for this build fix.
+
 ## Build and startup
 
 The Docker build installs the lockfile dependencies with `npm ci`, builds the React client and TypeScript server, and generates Prisma Client. Startup runs `prisma migrate deploy` before launching the API. This release adds four migrations:
@@ -87,3 +89,4 @@ These are local release checks. The Dockerfile was reviewed; Docker is unavailab
 - Taya regressions passed for arrival-based sequencing, retained daily/weekly assignments, dispatcher controls, late-driver handling, capacity dispatch, geofence departure detection, daily records, and driver/dispatcher queue-position agreement. Goso regressions passed.
 - Client event checks passed for zone labels, the 0.1 km boundary, temporary terminal exits, stale/missing GPS, repeated polling, re-entry, and unchanged API snapshot data. A dispatcher status change while the van remains physically inside does not create an exit entry.
 - The local API returned healthy after the production build. A Docker image build and remote Coolify deployment were not executed on this host.
+- CSS-minifier follow-up: the original minifier failed with the Lightning CSS native binding deliberately unavailable; the esbuild configuration built successfully under the same condition and emitted valid CSS with the Tailwind theme styles present. The Node 22 frontend build, complete production build, client TypeScript check, and client ESLint passed.

@@ -3,6 +3,10 @@ import react from '@vitejs/plugin-react';
 
 export default defineConfig({
   plugins: [react()],
+  build: {
+    // Avoid Lightning CSS's optional native binary during Alpine builds.
+    cssMinify: 'esbuild',
+  },
   server: {
     port: 5173,
     proxy: {
