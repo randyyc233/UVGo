@@ -691,12 +691,12 @@ function DispatcherTayaSchedulesPage() {
       {error ? <p role="alert" className="rounded-control bg-danger-soft p-3 text-sm text-danger">{error}</p> : null}
       <Card className="p-4 sm:p-5">
         <div className="border-b border-border pb-3 sm:pb-4">
-          <div className="flex flex-wrap items-center gap-2"><h3 className="text-base font-extrabold sm:text-lg">Weekly queue order</h3><StatusBadge tone="success">Repeats automatically</StatusBadge></div>
+          <div className="flex flex-wrap items-center gap-2"><h3 className="text-base font-extrabold sm:text-lg">Weekly driver assignments</h3><StatusBadge tone="success">Repeats automatically</StatusBadge></div>
           <details className="group mt-2 sm:hidden">
-            <summary className="flex min-h-touch cursor-pointer list-none items-center justify-between gap-2 text-xs font-semibold text-text-secondary [&::-webkit-details-marker]:hidden">How to arrange the weekly queue<ChevronDown className="h-4 w-4 shrink-0 transition-transform group-open:rotate-180" aria-hidden="true" /></summary>
-            <p className="pb-2 text-xs leading-5 text-text-secondary">Add drivers, use Up and Down to set their positions, then save the selected weekday. The saved order repeats every week.</p>
+            <summary className="flex min-h-touch cursor-pointer list-none items-center justify-between gap-2 text-xs font-semibold text-text-secondary [&::-webkit-details-marker]:hidden">How to assign drivers for the week<ChevronDown className="h-4 w-4 shrink-0 transition-transform group-open:rotate-180" aria-hidden="true" /></summary>
+            <p className="pb-2 text-xs leading-5 text-text-secondary">Add drivers and save the selected weekday. These trip assignments repeat every week. Each day's loading queue follows confirmed terminal arrival order.</p>
           </details>
-          <p className="mt-1 hidden text-sm leading-6 text-text-secondary sm:block">Add drivers and arrange their positions, then save the selected weekday.</p>
+          <p className="mt-1 hidden text-sm leading-6 text-text-secondary sm:block">Assign drivers for the selected weekday. Each day's loading queue follows confirmed terminal arrival order.</p>
         </div>
         <div className="-mx-1 mt-3 px-1 pb-2 sm:mt-4 sm:overflow-x-auto" role="tablist" aria-label="Taya weekly schedule days">
           <div className="grid grid-cols-7 gap-1 sm:flex sm:min-w-max sm:gap-2">
@@ -738,7 +738,7 @@ function DispatcherTayaSchedulesPage() {
             const vehicle = data.vehicles.find((candidate) => candidate.id === vehicleId);
             return <article key={vehicleId} className="min-w-0 rounded-control border border-border bg-surface p-3 shadow-sm sm:flex sm:items-center sm:gap-3 sm:shadow-none">
               <div className="flex min-w-0 items-start gap-2.5 sm:flex-1 sm:items-center">
-                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary text-sm font-black text-white sm:h-9 sm:w-9 sm:rounded-full" aria-label={`Queue position ${index + 1}`}>{index + 1}</span>
+                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary text-sm font-black text-white sm:h-9 sm:w-9 sm:rounded-full" aria-label={`Assignment number ${index + 1}`}>{index + 1}</span>
                 <div className="min-w-0 flex-1"><p className="break-words text-sm font-extrabold leading-5 sm:text-base">{vehicle?.driver ?? 'Driver'}</p><p className="mt-0.5 break-all text-[0.7rem] text-text-secondary sm:text-xs">{vehicle?.vanId ?? 'Van'}</p><p className="mt-1 text-xs text-text-secondary">{vehicle?.capacity ?? 0} passenger seats</p></div>
               </div>
               <div className="mt-3 grid grid-cols-3 gap-1.5 border-t border-border pt-3 sm:mt-0 sm:flex sm:shrink-0 sm:gap-1 sm:border-0 sm:pt-0">
@@ -748,7 +748,7 @@ function DispatcherTayaSchedulesPage() {
               </div>
             </article>;
           })}</div> : <p className="mt-4 rounded-control border border-dashed border-border bg-surface px-3 py-8 text-center text-sm text-text-muted">No drivers are scheduled for {selectedWeekday.label}.</p>}
-          <Button className="mt-4" fullWidth loading={saving} onClick={() => void save()} leadingIcon={<ShieldCheck className="h-4 w-4" />}>Save {selectedWeekday.label} queue order</Button>
+          <Button className="mt-4" fullWidth loading={saving} onClick={() => void save()} leadingIcon={<ShieldCheck className="h-4 w-4" />}>Save {selectedWeekday.label} assignments</Button>
         </section>
       </Card>
     </div>

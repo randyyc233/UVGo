@@ -12,7 +12,7 @@ import { DEFAULT_LEGAZPI_FARE } from '../config/fare.js';
 import { prisma } from '../lib/prisma.js';
 import { AppError } from '../utils/AppError.js';
 import { manilaServiceDay } from './driverSchedulePolicy.js';
-import { operationalQueueStatuses, withRouteQueue } from './queueSchedulingService.js';
+import { operationalQueueStatuses, queueOrder, withRouteQueue } from './queueSchedulingService.js';
 
 const closedQueueStatuses: QueueStatus[] = [QueueStatus.DEPARTED, QueueStatus.REJECTED, QueueStatus.REPLACED];
 const activeTripStatuses: TripStatus[] = [TripStatus.SCHEDULED, TripStatus.ASSIGNING, TripStatus.ASSIGNED, TripStatus.BOARDING, TripStatus.READY, TripStatus.DELAYED];
@@ -66,14 +66,60 @@ async function materializeWeeklyPlanInTransaction(tx: Prisma.TransactionClient, 
   });
 }
 
-/** Materialize today's dispatcher-planned Taya order into operational rows. */
+async function activeTayaRows(tx: Prisma.TransactionClient, now: Date) {
+  return tx.queueEntry.findMany({
+    where: {
+      route: RouteCode.LEGAZPI,
+      status: { in: operationalQueueStatuses },
+      vehicle: { status: { notIn: unavailableVehicleStatuses } },
+      tayaDailySchedule: { is: { serviceDate: serviceDateValue(todayKey(now)) } },
+    },
+    orderBy: queueOrder,
+  });
+}
+
+/** Admit a day's assigned driver at their first confirmed terminal arrival.
+ * Existing rows retain dispatcher overrides and departure-triggered late moves.
+ * Pending assignments stay behind arrivals; they do not reserve loading priority.
+ */
+export async function sequenceTayaArrivalInTransaction(
+  tx: Prisma.TransactionClient,
+  queueEntryId: string,
+  arrivedAt: Date,
+  now = arrivedAt,
+) {
+  const rows = await activeTayaRows(tx, now);
+  const arriving = rows.find((row) => row.id === queueEntryId);
+  if (!arriving || arriving.tayaArrivalAt) return;
+
+  await tx.queueEntry.update({
+    where: { id: queueEntryId },
+    data: { tayaArrivalAt: arrivedAt, arrivalTimestamp: arrivedAt },
+  });
+  // A late driver's return must not undo the existing move-to-last rule.
+  if (arriving.lateAt) return;
+
+  const reordered = rows.filter((row) => row.id !== queueEntryId);
+  const insertion = reordered.findIndex((row) => row.lateAt || !row.tayaArrivalAt
+    || row.tayaArrivalAt.getTime() > arrivedAt.getTime()
+    || (row.tayaArrivalAt.getTime() === arrivedAt.getTime() && row.vehicleId.localeCompare(arriving.vehicleId) > 0));
+  reordered.splice(insertion < 0 ? reordered.length : insertion, 0, arriving);
+  for (const [index, row] of reordered.entries()) {
+    if (row.position !== index + 1) {
+      await tx.queueEntry.update({ where: { id: row.id }, data: { position: index + 1 } });
+    }
+  }
+}
+
+/** Materialize today's planned Taya assignments without resetting queue order. */
 export async function syncTayaDailyQueueInTransaction(tx: Prisma.TransactionClient, now = new Date()) {
   const serviceDay = manilaServiceDay(now);
   const serviceDate = serviceDateValue(serviceDay.date);
   await materializeWeeklyPlanInTransaction(tx, now);
   const plans = await tx.tayaDailySchedule.findMany({
     where: { serviceDate },
-    orderBy: { position: 'asc' },
+    // The plan determines membership, never terminal loading priority.
+    orderBy: { vehicleId: 'asc' },
     include: {
       queueEntry: true,
       trip: true,
@@ -102,7 +148,9 @@ export async function syncTayaDailyQueueInTransaction(tx: Prisma.TransactionClie
     await tx.queueEntry.updateMany({ where: { id: { in: obsoleteIds } }, data: { status: QueueStatus.REPLACED } });
   }
 
-  let activePosition = 0;
+  const currentRows = await activeTayaRows(tx, now);
+  let activePosition = Math.max(0, ...currentRows.map((row) => row.position));
+  const arrivalsToSequence: { queueEntryId: string; arrivedAt: Date }[] = [];
   let materialized = 0;
   for (const plan of plans) {
     if (!plan.vehicle.assignedDriverId || !plan.vehicle.assignedDriver?.isActive) continue;
@@ -153,8 +201,8 @@ export async function syncTayaDailyQueueInTransaction(tx: Prisma.TransactionClie
       tripId = null;
     }
 
-    activePosition += 1;
     if (!queueEntryId) {
+      activePosition += 1;
       const queue = await tx.queueEntry.create({
         data: {
           vehicleId: plan.vehicleId,
@@ -165,8 +213,25 @@ export async function syncTayaDailyQueueInTransaction(tx: Prisma.TransactionClie
         },
       });
       queueEntryId = queue.id;
-    } else {
-      await tx.queueEntry.update({ where: { id: queueEntryId }, data: { position: activePosition } });
+    }
+
+    // Reconcile drivers already confirmed at the terminal before their daily
+    // assignment was materialized, including queues created before this change.
+    const knownArrival = plan.vehicle.latestArrivalAt;
+    if ((queueEntryId !== plan.queueEntryId || !plan.queueEntry?.tayaArrivalAt)
+      && knownArrival && knownArrival >= serviceDay.start && knownArrival < serviceDay.end) {
+      const confirmation = await tx.dispatchLog.findFirst({
+        where: {
+          route: RouteCode.LEGAZPI,
+          action: DispatchAction.TERMINAL_ARRIVAL_CONFIRMED,
+          targetId: plan.vehicleId,
+          timestamp: { gte: serviceDay.start, lt: serviceDay.end },
+        },
+        orderBy: { timestamp: 'asc' },
+      });
+      // Older GPS code copied the materialization time into latestArrivalAt;
+      // the terminal confirmation log is the actual arrival evidence instead.
+      arrivalsToSequence.push({ queueEntryId, arrivedAt: confirmation?.timestamp ?? knownArrival });
     }
 
     if (!tripId) {
@@ -222,7 +287,7 @@ export async function syncTayaDailyQueueInTransaction(tx: Prisma.TransactionClie
         data: {
           userId: plan.vehicle.assignedDriverId,
           type: NotificationType.ASSIGNMENT,
-          message: `You are assigned to today's Legazpi Taya queue at planned position #${plan.position}. Cancel the assignment if you cannot make the trip.`,
+          message: "You are assigned to today's Legazpi Taya trips. Your queue position follows your confirmed terminal arrival. Cancel the assignment if you cannot make the trip.",
         },
       });
       await tx.dispatchLog.create({
@@ -240,6 +305,18 @@ export async function syncTayaDailyQueueInTransaction(tx: Prisma.TransactionClie
 
     await tx.tayaDailySchedule.update({ where: { id: plan.id }, data: { queueEntryId, tripId } });
     materialized += 1;
+  }
+  arrivalsToSequence.sort((left, right) => left.arrivedAt.getTime() - right.arrivedAt.getTime()
+    || left.queueEntryId.localeCompare(right.queueEntryId));
+  for (const arrival of arrivalsToSequence) {
+    await sequenceTayaArrivalInTransaction(tx, arrival.queueEntryId, arrival.arrivedAt, now);
+  }
+  // Compact today's saved positions after cancellations or completed trips.
+  // Never sort these rows by the daily/weekly assignment positions.
+  for (const [index, row] of (await activeTayaRows(tx, now)).entries()) {
+    if (row.position !== index + 1) {
+      await tx.queueEntry.update({ where: { id: row.id }, data: { position: index + 1 } });
+    }
   }
   return { planned: plans.length, materialized };
 }

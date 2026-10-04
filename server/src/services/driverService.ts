@@ -20,6 +20,7 @@ import { toAuthenticatedUser } from './authService.js';
 import { manilaServiceDay } from './driverSchedulePolicy.js';
 import { isPresentForLoading, queueOrder, withRouteQueue } from './queueSchedulingService.js';
 import { dispatchQueueDeparture, normalizeRouteQueuePositions, recalculateTayaReadiness } from './automationService.js';
+import { syncTayaDailyQueue } from './tayaQueueService.js';
 
 const activeTripStatuses: TripStatus[] = [
   TripStatus.SCHEDULED,
@@ -99,6 +100,10 @@ export async function getDriverOverview(driverId: string) {
   const now = new Date();
   const currentDay = manilaServiceDay(now);
   const tayaServiceDate = new Date(`${currentDay.date}T00:00:00.000Z`);
+  const assignedVehicle = await prisma.vehicle.findUnique({ where: { assignedDriverId: driverId }, select: { route: true } });
+  if (!assignedVehicle) throw new AppError(404, 'VEHICLE_NOT_ASSIGNED', 'No vehicle is assigned to this driver.');
+  // Match dispatcher queue management even when the driver opens the day first.
+  if (assignedVehicle.route === RouteCode.LEGAZPI) await syncTayaDailyQueue(now);
   const vehicle = await prisma.vehicle.findUnique({
     where: { assignedDriverId: driverId },
     include: {
@@ -203,7 +208,10 @@ export async function getDriverOverview(driverId: string) {
       status: { notIn: [QueueStatus.DEPARTED, QueueStatus.REJECTED, QueueStatus.REPLACED] },
       ...(vehicle.route === RouteCode.GOA
         ? { scheduledLoadingTime: { gte: currentDay.start, lt: currentDay.end } }
-        : { tayaDailySchedule: { is: { serviceDate: tayaServiceDate } } }),
+        : {
+          tayaDailySchedule: { is: { serviceDate: tayaServiceDate } },
+          vehicle: { status: { notIn: [VehicleStatus.ON_TRIP, VehicleStatus.UNAVAILABLE] } },
+        }),
     },
     orderBy: queueOrder,
     include: { vehicle: { select: { status: true } } },
@@ -211,6 +219,11 @@ export async function getDriverOverview(driverId: string) {
   const dispatcher = await prisma.user.findFirst({ where: { role: 'DISPATCHER', dispatcherRoute: vehicle.route, isActive: true }, select: { name: true, contact: true } });
   const notifications = await prisma.notification.findMany({ where: { userId: driverId }, orderBy: { createdAt: 'desc' }, take: 6 });
   const currentQueueIndex = queue ? queueEntries.findIndex((entry) => entry.id === queue.id) : -1;
+  // Taya dashboard cards must use the same active occurrence and saved
+  // position shown by dispatcher queue management, not a separately counted rank.
+  const visibleQueue = vehicle.route === RouteCode.LEGAZPI
+    ? queueEntries[currentQueueIndex] ?? null
+    : queue;
   const latestTodayTrip = await prisma.trip.findFirst({
     where: {
       vehicleId: vehicle.id,
@@ -231,6 +244,9 @@ export async function getDriverOverview(driverId: string) {
   const todayQueueIndex = todayQueue && currentQueueStatuses.some((status) => status === todayQueue.status)
     ? queueEntries.findIndex((entry) => entry.id === todayQueue.id)
     : -1;
+  const todayQueuePosition = todayQueueIndex >= 0
+    ? vehicle.route === RouteCode.LEGAZPI ? queueEntries[todayQueueIndex]!.position : todayQueueIndex + 1
+    : null;
   const todayOccupancy = Math.min(
     capacity,
     todayTrip?.passengerCounts[0]?.count
@@ -247,9 +263,9 @@ export async function getDriverOverview(driverId: string) {
           ? 'ready_for_dispatch'
           : vehicle.status === VehicleStatus.LOADING || todayTrip?.status === TripStatus.BOARDING
             ? 'loading'
-            : todayQueueIndex === 0
+            : todayQueuePosition === 1
               ? 'queue_1'
-              : todayQueueIndex > 0
+              : todayQueuePosition !== null
                 ? 'waiting'
                 : todayAssignment?.status === AssignmentStatus.ACCEPTED
                   ? 'scheduled'
@@ -265,8 +281,8 @@ export async function getDriverOverview(driverId: string) {
   if (canStart && vehicle.route === RouteCode.GOA && assignedTrip && assignedTrip.scheduledOrTriggeredTime > new Date()) {
     canStart = false; startReason = 'Goso departures unlock at the scheduled time.';
   }
-  if (canStart && vehicle.route === RouteCode.LEGAZPI && queue?.position !== 1) {
-    canStart = false; startReason = 'Taya departure is available only to the first van in today\'s planned queue.';
+  if (canStart && vehicle.route === RouteCode.LEGAZPI && visibleQueue?.position !== 1) {
+    canStart = false; startReason = 'Taya departure is available only to the first van in today\'s queue.';
   }
   if (canStart && vehicle.route === RouteCode.LEGAZPI && occupancy < capacity) {
     canStart = false; startReason = `Taya departures require 100% occupancy (${capacity} of ${capacity}).`;
@@ -289,11 +305,11 @@ export async function getDriverOverview(driverId: string) {
       insideTerminalZone: vehicle.insideTerminalZone,
       locationTrackingActive: vehicle.locationTrackingActive,
     },
-    queue: queue ? {
-      id: queue.id,
-      position: vehicle.route === RouteCode.GOA && currentQueueIndex >= 0 ? currentQueueIndex + 1 : queue.position,
-      status: queue.status.toLowerCase(),
-      arrivalTimestamp: queue.arrivalTimestamp.toISOString(),
+    queue: visibleQueue ? {
+      id: visibleQueue.id,
+      position: vehicle.route === RouteCode.GOA && currentQueueIndex >= 0 ? currentQueueIndex + 1 : visibleQueue.position,
+      status: visibleQueue.status.toLowerCase(),
+      arrivalTimestamp: visibleQueue.arrivalTimestamp.toISOString(),
     } : null,
     trip: assignedTrip ? {
       id: assignedTrip.id,
@@ -344,7 +360,7 @@ export async function getDriverOverview(driverId: string) {
     occupancyEligibility: { allowed: occupancyAllowed, reason: occupancyReason },
     todayQueueStatus: {
       policy: vehicle.protocol,
-      queuePosition: todayQueueIndex >= 0 ? todayQueueIndex + 1 : null,
+      queuePosition: todayQueuePosition,
       scheduledLoadingTime: vehicle.route === RouteCode.GOA && todayTrip
         ? boardingStartFor(todayTrip.scheduledOrTriggeredTime, todayTrip.boardingStartTime).toISOString()
         : null,

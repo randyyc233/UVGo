@@ -6,13 +6,18 @@ The dispatcher follow-up fixes reviewed payments and departure history reappeari
 
 PayPal cards now include a payment-details viewer and allow pending/failed checkout entries to be removed from the dispatcher list. Checkout removal retains the payment, reservation, and seats, and a later completed capture reappears for review. Checkout cards distinguish order IDs from captured transaction IDs and explain when no receipt image was uploaded. These changes also need no additional migration.
 
+The October 4 Taya update retains daily and weekly driver assignments and orders the current-day Legazpi queue by first confirmed terminal arrival. Driver dashboard positions match the dispatcher queue. Existing capacity dispatch, dispatcher actions, late-driver handling, geofence departure detection, and daily records remain in place; Goso scheduling and dispatch rules are unchanged. This update requires the `20261004090000_taya_daily_arrival_sequence` migration listed below.
+
+The fleet event lists now display 100-meter terminal and 5 km Active Zone entry/exit labels in both desktop and mobile views. Legazpi terminal arrival times come from existing confirmation logs. The map observes 100-meter exits on the client while it is open, using the existing terminal status and GPS updates. These client exit entries are temporary, clear on reload, and are not saved as server records.
+
 ## Build and startup
 
-The Docker build installs the lockfile dependencies with `npm ci`, builds the React client and TypeScript server, and generates Prisma Client. Startup runs `prisma migrate deploy` before launching the API. This release adds three migrations:
+The Docker build installs the lockfile dependencies with `npm ci`, builds the React client and TypeScript server, and generates Prisma Client. Startup runs `prisma migrate deploy` before launching the API. This release adds four migrations:
 
 - `20261001093000_reservation_passenger_discounts`: saved student/senior counts and discount amount.
 - `20261001123000_public_route_fare`: public route-card fare settings.
 - `20261002020000_reservation_reschedule_limit`: persistent reschedule counts, initialized from retained historical records.
+- `20261004090000_taya_daily_arrival_sequence`: nullable first-arrival timestamp for Taya daily queue occurrences; existing schedules and records are retained.
 
 Let startup apply these migrations to the existing database before checking health. No database reset or seed is needed. The reschedule migration cannot reconstruct historical notifications that were already deleted; new counters persist independently of notification deletion.
 
@@ -49,6 +54,8 @@ The test runner uses its own temporary database and receipt directory. It requir
 
 After the deployment reports healthy, check the public homepage and route filters, passenger and dispatcher direct-page refreshes, and role sign-in. Confirm payment photos open when clicked, reviewed payments can be removed from the dispatcher's list and stay removed after dashboard refreshes, public Goa fares can be edited in Profile, and mobile schedule/queue layouts render correctly. Confirm Departure History appears as a separate navigation item for both routes and supports daily filtering and its three-dot deletion menu, with deletions surviving dashboard refreshes. On mobile Drivers & Vehicles, confirm the three-dot menu opens the existing Edit, Reset password, and Delete dialogs.
 
+For Taya, confirm daily/weekly assignments still exist, assigned vans load in terminal-arrival order, and driver dashboard positions match dispatcher queue management after arrival, override, move-to-last, and departure. Confirm Goso retains scheduled ordering and departure timing. On the fleet map, check entry/exit labels for the 100-meter terminal and 5 km Active Zone; keep the map open to observe a temporary 100-meter exit entry. Refreshing the map clears client exit entries and reloads the saved server events.
+
 For PayPal, confirm View payment details works on pending and captured checkouts at desktop and phone widths. Removing a pending checkout must retain the passenger's booking and seats; a subsequent completed capture must bring that entry back with its transaction ID. This list action does not cancel a checkout or release seats.
 
 In passenger booking, confirm schedule cards display the five-hour reservation cutoff. Booking details must show the reschedule deadline and remaining attempts. For 10:00 AM loading, both actions close at 5:00 AM; the fourth successful-reschedule request is rejected. Existing payments remain verifiable after the cutoff. Exercise booking, rescheduling and payment submissions only with deliberately chosen test data or a real passenger workflow. Use Sandbox buyer accounts for PayPal checks.
@@ -70,3 +77,13 @@ Do not run `demo:reset` or seed the database as part of a routine redeployment. 
 - Shipping-preference follow-up: the focused PayPal regression run passed all 20 checks, including creation with `NO_SHIPPING`, stored fare/reference preservation, capture, cancellation, ownership, and duplicate-charge protection. The actual Sandbox API accepted an uncaptured test order with the new setting. Server TypeScript and ESLint checks passed.
 
 These are local release checks. The Dockerfile was reviewed; Docker is unavailable on this host, so a container image build and remote Coolify redeployment were not executed. Verify the persistent storage mount, PayPal runtime credentials, migration completion, and deployment health in the hosting environment.
+
+## Verification recorded on October 4, 2026
+
+- Full isolated regression suite: 178 passed, zero failed, two demo-disabled checks skipped in the default run. Both skipped checks passed in a separate run with demo mode disabled.
+- Client and server TypeScript checks and ESLint: passed.
+- Complete `npm run build`: passed, including the React production bundle, Prisma Client generation, and server compilation.
+- All 29 migrations, including `20261004090000_taya_daily_arrival_sequence`, applied successfully in isolated test databases. Tests did not reset or seed the application database.
+- Taya regressions passed for arrival-based sequencing, retained daily/weekly assignments, dispatcher controls, late-driver handling, capacity dispatch, geofence departure detection, daily records, and driver/dispatcher queue-position agreement. Goso regressions passed.
+- Client event checks passed for zone labels, the 0.1 km boundary, temporary terminal exits, stale/missing GPS, repeated polling, re-entry, and unchanged API snapshot data. A dispatcher status change while the van remains physically inside does not create an exit entry.
+- The local API returned healthy after the production build. A Docker image build and remote Coolify deployment were not executed on this host.

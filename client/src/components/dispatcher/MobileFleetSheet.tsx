@@ -1,12 +1,9 @@
 import { BusFront, X } from 'lucide-react';
 import { useState } from 'react';
 import { formatDateTime12 } from '../../lib/dateTime';
+import { fleetEventLabel } from '../../lib/fleetEvents';
 import type { FleetSnapshot } from '../../types/dispatcher';
 import { Card, StatusBadge } from '../ui';
-
-function label(value: string) {
-  return value.replaceAll('_', ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
-}
 
 function time(value: string) {
   return formatDateTime12(value);
@@ -104,9 +101,9 @@ export function MobileFleetSheet({ fleet }: { fleet: FleetSnapshot }) {
             {fleet.events.length ? (
               fleet.events.map((event) => (
                 <div key={event.id} className="py-3">
-                  <p className="text-sm font-bold">{event.vanId} {label(event.eventType)}</p>
+                  <p className="text-sm font-bold">{event.vanId} {fleetEventLabel(event)}</p>
                   <p className="mt-1 text-xs text-text-secondary">
-                    {event.route} · {time(event.timestamp)}{event.distanceKm !== null ? ` · ${event.distanceKm} km` : ''}
+                    {event.route} · {event.eventType === 'terminal_arrival' ? 'Arrival time: ' : ''}{time(event.timestamp)}
                   </p>
                 </div>
               ))

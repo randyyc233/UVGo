@@ -228,7 +228,7 @@ This prototype does not connect to a GCash merchant API.
 
 - The NCEBT Active Zone has a fixed seeded center and a 5 km radius.
 - Goa is Goso: fixed schedule, FIFO vehicle assignment, and no full-occupancy requirement.
-- Legazpi is Taya: the saved daily sequence establishes priority and full occupancy enables capacity dispatch. After a van departs, its absent immediate follower is moved to the back; a present follower keeps its turn. GPS arrival preserves the daily order.
+- Legazpi is Taya: daily and weekly assignments determine which drivers operate that day; confirmed terminal arrivals establish their current-day FIFO loading order. Full occupancy enables capacity dispatch. Dispatcher position overrides remain available. After a van departs, its absent immediate follower is moved to the back; a present follower keeps its turn. Driver dashboard positions follow the dispatcher queue.
 - Only Goa trips can be reserved online.
 - Seats are unique per trip and checked again inside the reservation transaction.
 - Scheduled assignments are active immediately; cancellation invokes the existing replacement and passenger-reallocation workflow.

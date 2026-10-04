@@ -189,7 +189,7 @@ export async function seedDemoData() {
   const queueSpecs = [
     { id: 'seed_queue_goa_1', vehicleId: vehicles[0].id, route: RouteCode.GOA, position: 1, arrivalTimestamp: dateAt(0, 9, 15), status: QueueStatus.ASSIGNED },
     { id: 'seed_queue_goa_2', vehicleId: vehicles[1].id, route: RouteCode.GOA, position: 2, arrivalTimestamp: dateAt(0, 9, 28), status: QueueStatus.WAITING },
-    { id: 'seed_queue_legazpi_1', vehicleId: vehicles[2].id, route: RouteCode.LEGAZPI, position: 1, arrivalTimestamp: dateAt(0, 9, 10), status: QueueStatus.DELAYED },
+    { id: 'seed_queue_legazpi_1', vehicleId: vehicles[2].id, route: RouteCode.LEGAZPI, position: 1, arrivalTimestamp: dateAt(0, 9, 10), tayaArrivalAt: dateAt(0, 9, 10), status: QueueStatus.DELAYED },
     { id: 'seed_queue_legazpi_2', vehicleId: vehicles[3].id, route: RouteCode.LEGAZPI, position: 2, arrivalTimestamp: dateAt(0, 9, 35), status: QueueStatus.WAITING },
   ] as const;
 

@@ -259,6 +259,9 @@ model QueueEntry {
   route                RouteCode
   position             Int
   arrivalTimestamp     DateTime
+  /// First confirmed terminal arrival for this Taya daily occurrence. Null
+  /// means the driver is assigned for the day but has not arrived yet.
+  tayaArrivalAt        DateTime?
   /// GOSO queue priority. Scheduled drivers sort by this value, regardless of
   /// terminal arrival time, until their own loading deadline is missed.
   scheduledLoadingTime DateTime?
@@ -337,8 +340,8 @@ model WeeklySchedule {
   @@index([vehicleId, isActive])
 }
 
-/// A recurring Legazpi/Taya queue position for an ISO weekday. Unlike Goso,
-/// Taya stores only driver order and intentionally has no loading/departure time.
+/// A recurring Legazpi/Taya driver assignment for an ISO weekday. Its saved
+/// order does not determine the arrival-based operational queue.
 model TayaWeeklySchedule {
   id           String   @id @default(cuid())
   dispatcherId String
@@ -357,8 +360,8 @@ model TayaWeeklySchedule {
   @@index([vehicleId, weekday])
 }
 
-/// A dispatcher-defined Legazpi/Taya queue position for one Manila service
-/// day. Taya order is planned, not derived from terminal arrival timestamps.
+/// A dispatcher-defined Legazpi/Taya driver assignment for one Manila service
+/// day. QueueEntry owns the operational arrival-based queue position.
 model TayaDailySchedule {
   id           String      @id @default(cuid())
   dispatcherId String

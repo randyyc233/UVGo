@@ -430,6 +430,50 @@ export async function getFleetSnapshot(route: RouteCode) {
     take: 12,
     include: { vehicle: { select: { vanId: true, route: true } } },
   });
+  const geofenceEvents = events.map((event) => ({
+    id: event.id,
+    vanId: event.vehicle.vanId,
+    route: routeLabels[event.vehicle.route],
+    eventType: event.eventType.toLowerCase(),
+    timestamp: event.timestamp.toISOString(),
+    distanceKm: event.distanceKm ? Number(event.distanceKm) : null,
+  }));
+  let recentEvents = geofenceEvents;
+  if (route === RouteCode.LEGAZPI) {
+    // Terminal confirmations also exist for vans without a daily assignment.
+    // Display confirmed GPS arrivals, never a planned queue creation time.
+    const vehiclesById = new Map(vehicles.map((vehicle) => [vehicle.id, vehicle]));
+    const arrivals = await prisma.dispatchLog.findMany({
+      where: {
+        route: RouteCode.LEGAZPI,
+        action: DispatchAction.TERMINAL_ARRIVAL_CONFIRMED,
+        targetId: { in: [...vehiclesById.keys()] },
+      },
+      orderBy: [{ timestamp: 'desc' }, { id: 'asc' }],
+      take: 12,
+      select: { id: true, targetId: true, timestamp: true, metadata: true },
+    });
+    recentEvents = [...geofenceEvents, ...arrivals.map((arrival) => {
+      const vehicle = vehiclesById.get(arrival.targetId)!;
+      const metadata = arrival.metadata;
+      const recordedArrival = metadata && typeof metadata === 'object' && !Array.isArray(metadata)
+        && typeof metadata.observedAt === 'string' ? new Date(metadata.observedAt) : null;
+      // Older confirmations have only their server-recorded confirmation time.
+      const arrivedAt = recordedArrival && Number.isFinite(recordedArrival.getTime()) ? recordedArrival : arrival.timestamp;
+      return {
+        id: `terminal_arrival:${arrival.id}`,
+        vanId: vehicle.vanId,
+        route: routeLabels[vehicle.route],
+        eventType: 'terminal_arrival',
+        timestamp: arrivedAt.toISOString(),
+        distanceKm: metadata && typeof metadata === 'object' && !Array.isArray(metadata)
+          && typeof metadata.distanceKm === 'number' ? Number(metadata.distanceKm.toFixed(3)) : null,
+      };
+    })]
+      .sort((left, right) => new Date(right.timestamp).getTime() - new Date(left.timestamp).getTime()
+        || left.id.localeCompare(right.id))
+      .slice(0, 12);
+  }
   return {
     route: routeLabels[route],
     routeCode: route.toLowerCase(),
@@ -457,7 +501,7 @@ export async function getFleetSnapshot(route: RouteCode) {
         updatedAt: vehicle.latestLocationObservedAt?.toISOString() ?? event?.timestamp.toISOString() ?? vehicle.updatedAt.toISOString(),
       };
     }),
-    events: events.map((event) => ({ id: event.id, vanId: event.vehicle.vanId, route: routeLabels[event.vehicle.route], eventType: event.eventType.toLowerCase(), timestamp: event.timestamp.toISOString(), distanceKm: event.distanceKm ? Number(event.distanceKm) : null })),
+    events: recentEvents,
     updatedAt: new Date().toISOString(),
   };
 }

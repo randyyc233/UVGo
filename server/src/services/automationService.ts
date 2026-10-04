@@ -20,7 +20,7 @@ import { AppError } from '../utils/AppError.js';
 import { manilaServiceDay } from './driverSchedulePolicy.js';
 import { admitAcceptedGosoSchedulesForDay, evaluateGosoLoading, isConfirmedForScheduledLoading, isPresentForLoading, normalizeSavedQueue, queueOrder, withRouteQueue } from './queueSchedulingService.js';
 import { selectTripForQueueRow } from './queueTripSelection.js';
-import { syncTayaDailyQueue } from './tayaQueueService.js';
+import { sequenceTayaArrivalInTransaction, syncTayaDailyQueue } from './tayaQueueService.js';
 
 const activeQueueStatuses: QueueStatus[] = [
   QueueStatus.WAITING,
@@ -590,7 +590,22 @@ export async function recordDriverLocation(
     return { transition: activeTransition ?? 'none', insideActiveZone, distanceKm, trackingActive: insideActiveZone };
   }
 
-  if (!vehicle.insideTerminalZone) {
+  // A van can remain inside the terminal across Manila midnight. Confirm
+  // attendance for its new Taya occurrence using the same reliable samples;
+  // yesterday's terminal flag must not supply today's FIFO arrival time.
+  const needsTodayTayaArrival = vehicle.route === RouteCode.LEGAZPI && vehicle.insideTerminalZone
+    && distanceKm <= TERMINAL_GEOFENCE.arrivalRadiusKm
+    && Boolean(await prisma.queueEntry.findFirst({
+      where: {
+        vehicleId: vehicle.id,
+        route: RouteCode.LEGAZPI,
+        status: { in: activeQueueStatuses },
+        tayaArrivalAt: null,
+        tayaDailySchedule: { is: { serviceDate: new Date(`${manilaServiceDay(observedAt).date}T00:00:00.000Z`) } },
+      },
+      select: { id: true },
+    }));
+  if (!vehicle.insideTerminalZone || needsTodayTayaArrival) {
     if (distanceKm <= TERMINAL_GEOFENCE.arrivalRadiusKm) {
       const nextCount = intervalEligible ? vehicle.terminalEntrySampleCount + 1 : vehicle.terminalEntrySampleCount;
       await prisma.vehicle.update({ where: { id: vehicle.id }, data: { terminalEntrySampleCount: nextCount, terminalExitSampleCount: 0 } });
@@ -624,7 +639,7 @@ export async function recordDriverLocation(
               lastKnownInsideZone: true,
               insideTerminalZone: true,
               locationTrackingActive: true,
-              latestArrivalAt: existingQueue?.arrivalTimestamp ?? observedAt,
+              latestArrivalAt: vehicle.route === RouteCode.LEGAZPI ? observedAt : existingQueue?.arrivalTimestamp ?? observedAt,
               terminalEntrySampleCount: 0,
               terminalExitSampleCount: 0,
               departureSequenceStartKm: null,
@@ -632,6 +647,10 @@ export async function recordDriverLocation(
               departureReviewReason: null,
             },
           });
+
+          if (vehicle.route === RouteCode.LEGAZPI && queueEntryId) {
+            await sequenceTayaArrivalInTransaction(transaction, queueEntryId, observedAt);
+          }
 
           const activeTrip = await transaction.trip.findFirst({
             where: {
@@ -687,7 +706,10 @@ export async function recordDriverLocation(
               action: DispatchAction.TERMINAL_ARRIVAL_CONFIRMED,
               targetId: vehicle.id,
               route: vehicle.route,
-              metadata: { queueEntryId, samples: nextCount, distanceKm, accuracyMeters },
+              metadata: {
+                queueEntryId, samples: nextCount, distanceKm, accuracyMeters,
+                ...(vehicle.route === RouteCode.LEGAZPI ? { observedAt: observedAt.toISOString() } : {}),
+              },
             },
           });
           await transaction.notification.create({
@@ -695,7 +717,7 @@ export async function recordDriverLocation(
               userId: driverId,
               type: NotificationType.QUEUE,
               message: vehicle.route === RouteCode.LEGAZPI
-                ? `${vehicle.vanId} terminal arrival confirmed. Your dispatcher-planned Taya position is unchanged.`
+                ? `${vehicle.vanId} terminal arrival confirmed. Your Taya queue position follows terminal arrival order.`
                 : `${vehicle.vanId} terminal arrival confirmed and queue timestamp recorded.`,
             },
           });

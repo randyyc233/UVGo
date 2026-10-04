@@ -35,6 +35,7 @@ import { DepartureHistory } from "../../components/dispatcher/DepartureHistory";
 import { FleetMap } from "../../components/dispatcher/FleetMap";
 import { MobileFleetSheet } from "../../components/dispatcher/MobileFleetSheet";
 import { formatDateTime12, formatTime12 } from "../../lib/dateTime";
+import { fleetEventLabel, mergeFleetEvents, observeTerminalExits } from "../../lib/fleetEvents";
 import {
   AlertItem,
   Button,
@@ -357,13 +358,20 @@ export function DispatcherFleetPage() {
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     let active = true;
+    const terminalPresence = new Map<string, number>();
+    let terminalExits: FleetSnapshot['events'] = [];
+    let latestSnapshotAt = 0;
     async function load() {
       try {
         const response = await apiRequest<{ fleet: FleetSnapshot }>(
           "/dispatcher/fleet",
         );
         if (active) {
-          setFleet(response.fleet);
+          const snapshotAt = new Date(response.fleet.updatedAt).getTime();
+          if (snapshotAt < latestSnapshotAt) return;
+          latestSnapshotAt = snapshotAt;
+          terminalExits = observeTerminalExits(response.fleet, terminalPresence, terminalExits);
+          setFleet(mergeFleetEvents(response.fleet, terminalExits));
           setError(null);
         }
       } catch (caught) {
@@ -444,13 +452,10 @@ export function DispatcherFleetPage() {
               fleet.events.map((event) => (
                 <div key={event.id} className="py-3">
                   <p className="text-sm font-bold">
-                    {event.vanId} {label(event.eventType)}
+                    {event.vanId} {fleetEventLabel(event)}
                   </p>
                   <p className="mt-1 text-xs text-text-secondary">
-                    {event.route} · {time(event.timestamp)}
-                    {event.distanceKm !== null
-                      ? ` · ${event.distanceKm} km`
-                      : ""}
+                    {event.route} · {event.eventType === "terminal_arrival" ? "Arrival time: " : ""}{time(event.timestamp)}
                   </p>
                 </div>
               ))
@@ -837,10 +842,10 @@ function QueueActions({
           <Ellipsis className="h-4 w-4" aria-hidden="true" />
         </summary>
         <div className="absolute right-0 z-30 mt-1 min-w-44 overflow-hidden rounded-control border border-border bg-surface p-1 shadow-floating">
-          <button type="button" disabled={loading} onClick={(event) => { event.currentTarget.closest("details")?.removeAttribute("open"); void runAction(entry, "override"); }} className="block min-h-touch w-full rounded px-3 py-2 text-left text-sm font-semibold text-text-primary hover:bg-cream">Change position</button>
+          <button type="button" disabled={loading} onClick={(event) => { event.currentTarget.closest("details")?.removeAttribute("open"); void runAction(entry, "override"); }} className="block min-h-touch w-full rounded px-3 py-2 text-left text-sm font-semibold text-text-primary hover:bg-cream">Override</button>
           <button type="button" disabled={loading} onClick={(event) => { event.currentTarget.closest("details")?.removeAttribute("open"); void runAction(entry, "move_to_last"); }} className="block min-h-touch w-full rounded px-3 py-2 text-left text-sm font-semibold text-text-primary hover:bg-cream">Move to last</button>
           <button type="button" disabled={loading} onClick={(event) => { event.currentTarget.closest("details")?.removeAttribute("open"); void runAction(entry, "notify_driver", true); }} className="flex min-h-touch w-full items-center gap-2 rounded px-3 py-2 text-left text-sm font-semibold text-primary hover:bg-primary-soft"><Send className="h-4 w-4" />Notify driver</button>
-          <button type="button" disabled={loading} onClick={(event) => { event.currentTarget.closest("details")?.removeAttribute("open"); void runAction(entry, "replace"); }} className="flex min-h-touch w-full items-center gap-2 rounded px-3 py-2 text-left text-sm font-semibold text-danger hover:bg-danger-soft"><X className="h-4 w-4" />Replace vehicle</button>
+          <button type="button" disabled={loading} onClick={(event) => { event.currentTarget.closest("details")?.removeAttribute("open"); void runAction(entry, "replace"); }} className="flex min-h-touch w-full items-center gap-2 rounded px-3 py-2 text-left text-sm font-semibold text-danger hover:bg-danger-soft"><X className="h-4 w-4" />Remove</button>
         </div>
       </details>
     </div>
@@ -1946,7 +1951,7 @@ export function DispatcherMorePage() {
       title: "Payments",
       text: "Verify GCash receipts and PayPal payment reports.",
     },
-  ].map((item) => item.to === '/dispatcher/schedules' && user?.dispatcherRoute === 'legazpi' ? { ...item, text: 'Set the recurring Taya driver order for each weekday.' } : item)
+  ].map((item) => item.to === '/dispatcher/schedules' && user?.dispatcherRoute === 'legazpi' ? { ...item, text: 'Set the recurring Taya trip assignments for each weekday.' } : item)
     .filter((item) => user?.dispatcherRoute !== 'legazpi' || item.to !== '/dispatcher/payments');
   return (
     <div className="mx-auto grid max-w-4xl gap-3 sm:grid-cols-2">
