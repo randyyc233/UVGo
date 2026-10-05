@@ -26,6 +26,7 @@ import { admitAcceptedGosoSchedulesForDay, operationalQueueStatuses, reorderDisp
 import { selectTripForQueueRow } from './queueTripSelection.js';
 import { confirmDepartureByDispatcher, dispatchQueueDeparture, recalculateTayaReadiness, reallocateUnavailableVehicle } from './automationService.js';
 import { syncTayaDailyQueue } from './tayaQueueService.js';
+import { tayaQueueAdmissionWhere } from './tayaQueueEligibility.js';
 import { materializeWeeklySchedules } from './weeklyScheduleService.js';
 
 const routeLabels: Record<RouteCode, string> = { GOA: 'Goa', LEGAZPI: 'Legazpi' };
@@ -96,17 +97,15 @@ function displayCoordinates(index: number, inside: boolean) {
 
 async function queueRows(route?: RouteCode) {
   const today = manilaServiceDay(new Date());
-  const tayaServiceDate = new Date(`${today.date}T00:00:00.000Z`);
   const entries = await prisma.queueEntry.findMany({
     where: {
       route,
       status: { notIn: [QueueStatus.DEPARTED, QueueStatus.REJECTED, QueueStatus.REPLACED] },
-      vehicle: { status: { notIn: [VehicleStatus.ON_TRIP, VehicleStatus.UNAVAILABLE] } },
       ...(route === RouteCode.GOA
-        ? { scheduledLoadingTime: { gte: today.start, lt: today.end } }
+        ? { vehicle: { status: { notIn: [VehicleStatus.ON_TRIP, VehicleStatus.UNAVAILABLE] } }, scheduledLoadingTime: { gte: today.start, lt: today.end } }
         : route === RouteCode.LEGAZPI
-          ? { tayaDailySchedule: { is: { serviceDate: tayaServiceDate } } }
-          : {}),
+          ? tayaQueueAdmissionWhere()
+          : { vehicle: { status: { notIn: [VehicleStatus.ON_TRIP, VehicleStatus.UNAVAILABLE] } }, OR: [{ route: RouteCode.GOA }, { route: RouteCode.LEGAZPI, ...tayaQueueAdmissionWhere() }] }),
     },
     orderBy: [{ route: 'asc' }, { position: 'asc' }],
     include: {
@@ -415,7 +414,7 @@ export async function getFleetSnapshot(route: RouteCode) {
     include: {
       assignedDriver: { select: { name: true } },
       geofenceEvents: { orderBy: { timestamp: 'desc' }, take: 1 },
-      queueEntries: { where: { status: { notIn: [QueueStatus.DEPARTED, QueueStatus.REJECTED, QueueStatus.REPLACED] } }, orderBy: { createdAt: 'desc' }, take: 1 },
+      queueEntries: { where: { status: { notIn: [QueueStatus.DEPARTED, QueueStatus.REJECTED, QueueStatus.REPLACED] }, ...(route === RouteCode.LEGAZPI ? tayaQueueAdmissionWhere() : {}) }, orderBy: { createdAt: 'desc' }, take: 1 },
     },
   });
   const events = await prisma.geofenceEvent.findMany({
@@ -520,7 +519,7 @@ async function getPendingArrivalDiagnostics(route: RouteCode) {
       terminalEntrySampleCount: true,
       assignedDriver: { select: { name: true } },
       queueEntries: {
-        where: { status: { in: operationalQueueStatuses } },
+        where: { status: { in: operationalQueueStatuses }, ...(route === RouteCode.LEGAZPI ? tayaQueueAdmissionWhere() : {}) },
         select: { id: true },
         take: 1,
       },
@@ -628,10 +627,9 @@ async function updateDispatcherPassengers(actorUserId: string, route: RouteCode,
       where: {
         route,
         status: { in: operationalQueueStatuses },
-        vehicle: { status: { notIn: [VehicleStatus.ON_TRIP, VehicleStatus.UNAVAILABLE] } },
         ...(route === RouteCode.GOA
-          ? { scheduledLoadingTime: { gte: day.start, lt: day.end } }
-          : { tayaDailySchedule: { is: { serviceDate: tayaServiceDate } } }),
+          ? { vehicle: { status: { notIn: [VehicleStatus.ON_TRIP, VehicleStatus.UNAVAILABLE] } }, scheduledLoadingTime: { gte: day.start, lt: day.end } }
+          : tayaQueueAdmissionWhere()),
       },
       orderBy: { position: 'asc' },
       select: { id: true },
@@ -669,7 +667,8 @@ export async function applyQueueAction(actorUserId: string, dispatcherRoute: Rou
   if (entry.route !== dispatcherRoute) throw new AppError(403, 'ROUTE_ACCESS_DENIED', `This dispatcher can manage only the ${routeLabels[dispatcherRoute]} route.`);
   if (dispatcherRoute === RouteCode.LEGAZPI) {
     const today = new Date(`${manilaServiceDay(new Date()).date}T00:00:00.000Z`);
-    if (entry.tayaDailySchedule?.serviceDate.getTime() !== today.getTime()) {
+    if (entry.tayaDailySchedule?.serviceDate.getTime() !== today.getTime()
+      || !entry.tayaArrivalAt || entry.position === null || !entry.vehicle.insideTerminalZone) {
       throw new AppError(409, 'QUEUE_ENTRY_NOT_ACTIVE', 'Only entries in today\'s Taya queue can be changed.');
     }
   }

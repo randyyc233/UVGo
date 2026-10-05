@@ -21,6 +21,7 @@ import { manilaServiceDay } from './driverSchedulePolicy.js';
 import { isPresentForLoading, queueOrder, withRouteQueue } from './queueSchedulingService.js';
 import { dispatchQueueDeparture, normalizeRouteQueuePositions, recalculateTayaReadiness } from './automationService.js';
 import { syncTayaDailyQueue } from './tayaQueueService.js';
+import { tayaQueueAdmissionWhere } from './tayaQueueEligibility.js';
 
 const activeTripStatuses: TripStatus[] = [
   TripStatus.SCHEDULED,
@@ -99,7 +100,6 @@ async function ownVehicle(driverId: string) {
 export async function getDriverOverview(driverId: string) {
   const now = new Date();
   const currentDay = manilaServiceDay(now);
-  const tayaServiceDate = new Date(`${currentDay.date}T00:00:00.000Z`);
   const assignedVehicle = await prisma.vehicle.findUnique({ where: { assignedDriverId: driverId }, select: { route: true } });
   if (!assignedVehicle) throw new AppError(404, 'VEHICLE_NOT_ASSIGNED', 'No vehicle is assigned to this driver.');
   // Match dispatcher queue management even when the driver opens the day first.
@@ -113,7 +113,7 @@ export async function getDriverOverview(driverId: string) {
           status: { notIn: [QueueStatus.DEPARTED, QueueStatus.REJECTED, QueueStatus.REPLACED] },
           OR: [
             { route: RouteCode.GOA },
-            { route: RouteCode.LEGAZPI, tayaDailySchedule: { is: { serviceDate: tayaServiceDate } } },
+            { route: RouteCode.LEGAZPI, ...tayaQueueAdmissionWhere(now) },
           ],
         },
         orderBy: { createdAt: 'desc' },
@@ -209,8 +209,7 @@ export async function getDriverOverview(driverId: string) {
       ...(vehicle.route === RouteCode.GOA
         ? { scheduledLoadingTime: { gte: currentDay.start, lt: currentDay.end } }
         : {
-          tayaDailySchedule: { is: { serviceDate: tayaServiceDate } },
-          vehicle: { status: { notIn: [VehicleStatus.ON_TRIP, VehicleStatus.UNAVAILABLE] } },
+          ...tayaQueueAdmissionWhere(now),
         }),
     },
     orderBy: queueOrder,

@@ -127,6 +127,14 @@ async function prepareTayaArrivalTracking() {
   });
 }
 
+async function confirmTayaTestArrival(driverId = 'seed_user_driver_noel') {
+  await prisma.vehicle.update({
+    where: { assignedDriverId: driverId },
+    data: { goOnTripEnabled: true, insideTerminalZone: false, latestArrivalAt: null, latestLocationObservedAt: null, terminalEntrySampleCount: 0 },
+  });
+  await recordReliableSequence(driverId, Array.from({ length: TERMINAL_GEOFENCE.requiredSamples }, () => 0.05), Date.now() - 10_000);
+}
+
 async function resetIsolatedFixtures() {
   // Demo reset is normally unavailable with DEMO_MODE=false. This temporary
   // override applies only to the exact throwaway database guarded above.
@@ -393,6 +401,7 @@ for (const route of [RouteCode.GOA, RouteCode.LEGAZPI]) {
     const queueId = goa ? 'seed_queue_goa_1' : 'seed_queue_legazpi_1';
     const tripId = goa ? 'seed_trip_goa_morning' : 'seed_trip_legazpi_loading';
     const vehicleId = goa ? 'seed_vehicle_033' : 'seed_vehicle_019';
+    if (!goa) await confirmTayaTestArrival();
     if (goa) await prisma.tripAssignment.update({ where: { id: 'seed_assignment_goa' }, data: { status: 'ACCEPTED' } });
     const before = await prisma.trip.findUniqueOrThrow({ where: { id: tripId }, include: { reservations: { include: { seats: true, payments: true } } } });
     const outcomes = await Promise.allSettled([
@@ -432,6 +441,7 @@ for (const route of [RouteCode.GOA, RouteCode.LEGAZPI]) {
     const queueId = goa ? 'seed_queue_goa_1' : 'seed_queue_legazpi_1';
     const tripId = goa ? 'seed_trip_goa_morning' : 'seed_trip_legazpi_loading';
     await prisma.passengerCount.deleteMany({ where: { tripId } });
+    if (!goa) await confirmTayaTestArrival();
     await prisma.queueEntry.update({ where: { id: queueId }, data: { status: QueueStatus.ACCEPTED, ...(goa ? { scheduledLoadingTime: new Date() } : {}) } });
     const vehicle = await prisma.vehicle.findUniqueOrThrow({ where: { id: goa ? 'seed_vehicle_033' : 'seed_vehicle_019' } });
     await prisma.vehicle.update({ where: { id: vehicle.id }, data: { insideTerminalZone: true, latestDistanceKm: 0.02, latestLocationObservedAt: null } });
@@ -607,14 +617,63 @@ test('4a. Taya weekly trip assignments retain their saved order without resettin
   assert.deepEqual(saved.entries.filter((entry) => entry.weekday === weekday).map((entry) => entry.vehicle.id), ['seed_vehicle_005', 'seed_vehicle_019']);
 
   const queue = await getDispatcherQueue(RouteCode.LEGAZPI);
-  assert.deepEqual(queue.entries.map((entry) => entry.vanId), ['VAN-019', 'VAN-005']);
-  assert.deepEqual(queue.entries.map((entry) => entry.position), [1, 2]);
+  assert.deepEqual(queue.entries.map((entry) => entry.vanId), ['VAN-019']);
+  assert.deepEqual(queue.entries.map((entry) => entry.position), [1]);
 
   const overview = await getDriverOverview('seed_user_driver_noel');
   assert.equal(overview.todayQueueStatus.policy, 'TAYA');
-  assert.equal(overview.todayQueueStatus.queuePosition, 2);
+  assert.equal(overview.todayQueueStatus.queuePosition, null);
   assert.equal(overview.todayQueueStatus.scheduledLoadingTime, null);
   assert.equal(overview.todayQueueStatus.scheduledDepartureTime, null);
+});
+
+test('Taya admission withholds positions from scheduled vans until reliable terminal arrival without changing assignments', async () => {
+  await prepareTayaArrivalTracking();
+  await syncTayaDailyQueue();
+  const dailyBefore = await prisma.tayaDailySchedule.findMany({ orderBy: { id: 'asc' }, select: { id: true, vehicleId: true, position: true, tripId: true, queueEntryId: true } });
+  const weeklyBefore = await prisma.tayaWeeklySchedule.findMany({ orderBy: { id: 'asc' } });
+  const tripsBefore = await prisma.trip.findMany({ where: { route: RouteCode.LEGAZPI }, orderBy: { id: 'asc' } });
+  const assignmentsBefore = await prisma.tripAssignment.findMany({ where: { trip: { route: RouteCode.LEGAZPI } }, orderBy: { id: 'asc' } });
+  assert.equal((await getDispatcherQueue(RouteCode.LEGAZPI)).entries.length, 0);
+  const pending = await getDriverOverview('seed_user_driver_noel');
+  assert.ok(pending.assignment);
+  assert.ok(pending.trip);
+  assert.equal(pending.queue, null);
+  assert.equal(pending.todayQueueStatus.queuePosition, null);
+  assert.equal(pending.queueSummary.total, 0);
+  assert.equal((await getPublicDepartures()).departures.some((entry) => entry.routeCode === 'legazpi'), false);
+  assert.ok((await getFleetSnapshot(RouteCode.LEGAZPI)).vehicles.filter((entry) => ['VAN-005', 'VAN-019'].includes(entry.vanId)).every((entry) => entry.queuePosition === null));
+  await assert.rejects(() => applyQueueAction('seed_user_dispatcher_legazpi', RouteCode.LEGAZPI, 'seed_queue_legazpi_2', { action: 'override', newPosition: 1, reason: 'Unarrived van must not be admitted by reordering.' }), (error: unknown) => error instanceof AppError && error.code === 'QUEUE_ENTRY_NOT_ACTIVE');
+  const startedAt = Date.now() - 30_000;
+  await recordDriverLocation('seed_user_driver_noel', latitudeAtDistanceKm(0.05), NCEBT.longitude, new Date(startedAt), TERMINAL_GEOFENCE.maxAccuracyMeters + 1);
+  await recordDriverLocation('seed_user_driver_noel', latitudeAtDistanceKm(1), NCEBT.longitude, new Date(startedAt + 5_000), 10);
+  assert.equal((await getDispatcherQueue(RouteCode.LEGAZPI)).entries.length, 0);
+  assert.ok((await prisma.queueEntry.findMany({ where: { route: RouteCode.LEGAZPI, status: { in: operationalQueueStatuses } } })).every((entry) => entry.position === null));
+  const samples = Array.from({ length: TERMINAL_GEOFENCE.requiredSamples }, () => 0.05);
+  const arrivalStart = startedAt + 5_000 + TERMINAL_GEOFENCE.sampleMinIntervalMs;
+  const arrival = await recordReliableSequence('seed_user_driver_noel', samples, arrivalStart);
+  assert.equal(arrival?.transition, 'terminal_arrival_confirmed');
+  assert.deepEqual((await getDispatcherQueue(RouteCode.LEGAZPI)).entries.map((entry) => [entry.vanId, entry.position]), [['VAN-005', 1]]);
+  await recordReliableSequence('seed_user_driver_pedro', samples, arrivalStart + samples.length * TERMINAL_GEOFENCE.sampleMinIntervalMs + 1_000);
+  assert.deepEqual((await getDispatcherQueue(RouteCode.LEGAZPI)).entries.map((entry) => [entry.vanId, entry.position]), [['VAN-005', 1], ['VAN-019', 2]]);
+  assert.deepEqual(await prisma.tayaDailySchedule.findMany({ orderBy: { id: 'asc' }, select: { id: true, vehicleId: true, position: true, tripId: true, queueEntryId: true } }), dailyBefore);
+  assert.deepEqual(await prisma.tayaWeeklySchedule.findMany({ orderBy: { id: 'asc' } }), weeklyBefore);
+  assert.deepEqual(await prisma.trip.findMany({ where: { route: RouteCode.LEGAZPI }, orderBy: { id: 'asc' } }), tripsBefore);
+  assert.deepEqual(await prisma.tripAssignment.findMany({ where: { trip: { route: RouteCode.LEGAZPI } }, orderBy: { id: 'asc' } }), assignmentsBefore);
+});
+
+test('Taya withdraws an absent confirmed van without cancelling its daily trip or assignment', async () => {
+  await confirmTayaTestArrival();
+  const before = await getDriverOverview('seed_user_driver_pedro');
+  assert.equal(before.queue?.position, 1);
+  await prisma.vehicle.update({ where: { id: 'seed_vehicle_019' }, data: { insideTerminalZone: false } });
+  const absent = await getDriverOverview('seed_user_driver_pedro');
+  assert.equal(absent.queue, null);
+  assert.equal(absent.todayQueueStatus.queuePosition, null);
+  assert.deepEqual(absent.assignment, before.assignment);
+  assert.equal(absent.trip?.id, before.trip?.id);
+  assert.equal((await prisma.queueEntry.findUniqueOrThrow({ where: { id: 'seed_queue_legazpi_1' } })).position, null);
+  assert.deepEqual((await getDispatcherQueue(RouteCode.LEGAZPI)).entries.map((entry) => [entry.vanId, entry.position]), [['VAN-005', 1]]);
 });
 
 test('Taya FIFO changes only queue positions and preserves weekly/daily trip assignments and Goso', async () => {
@@ -650,7 +709,7 @@ test('Taya FIFO changes only queue positions and preserves weekly/daily trip ass
   assert.deepEqual(await prisma.queueEntry.findMany({ where: { route: RouteCode.GOA }, orderBy: { id: 'asc' } }), gosoBefore);
 });
 
-test('Taya arrivals use observed times across drivers and ignore unreliable, duplicate, and repeat arrivals', async () => {
+test('Taya arrivals use observed times, reject unreliable samples, and re-admit returning vans by their new arrival', async () => {
   await prepareTayaArrivalTracking();
   const startedAt = Date.now() - 45_000;
   const samples = Array.from({ length: TERMINAL_GEOFENCE.requiredSamples }, () => 0.05);
@@ -671,8 +730,8 @@ test('Taya arrivals use observed times across drivers and ignore unreliable, dup
   });
   await recordReliableSequence('seed_user_driver_noel', samples, startedAt + 35_000);
   await syncTayaDailyQueue();
-  assert.deepEqual((await prisma.queueEntry.findUniqueOrThrow({ where: { id: 'seed_queue_legazpi_2' } })).tayaArrivalAt, firstArrival);
-  assert.equal((await getDispatcherQueue(RouteCode.LEGAZPI)).entries[0]?.vanId, 'VAN-005');
+  assert.ok((await prisma.queueEntry.findUniqueOrThrow({ where: { id: 'seed_queue_legazpi_2' } })).tayaArrivalAt! > firstArrival!);
+  assert.equal((await getDispatcherQueue(RouteCode.LEGAZPI)).entries[0]?.vanId, 'VAN-019');
 });
 
 test('Taya GPS arrival cannot admit a driver outside today\'s saved trip assignments', async () => {
@@ -715,6 +774,7 @@ test('Taya current-day FIFO needs fresh arrival confirmation even when yesterday
 });
 
 test('4b. a manual Taya reorder persists in the saved daily sequence', async () => {
+  await confirmTayaTestArrival();
   await applyQueueAction('seed_user_dispatcher_legazpi', RouteCode.LEGAZPI, 'seed_queue_legazpi_2', {
     action: 'override',
     newPosition: 1,
@@ -747,6 +807,7 @@ test('Taya dispatcher overrides survive synchronization and another terminal arr
 });
 
 test('Taya driver dashboard uses dispatcher positions and excludes unavailable or departed vans', async () => {
+  await confirmTayaTestArrival();
   await syncTayaDailyQueue();
   await prisma.vehicle.update({ where: { id: 'seed_vehicle_019' }, data: { status: VehicleStatus.UNAVAILABLE } });
   const overview = await getDriverOverview('seed_user_driver_noel');
@@ -769,7 +830,7 @@ test('Taya driver dashboard uses dispatcher positions and excludes unavailable o
   assert.equal(afterDeparture.queueSummary.total, 1);
 });
 
-test('Taya driver dashboard materializes today\'s assigned queue without first opening dispatcher management', async () => {
+test('Taya driver dashboard materializes today\'s assignment but waits for arrival before assigning a position', async () => {
   const day = manilaServiceDay(new Date());
   const today = new Date(`${day.date}T00:00:00.000Z`);
   await prisma.tayaDailySchedule.updateMany({
@@ -783,13 +844,17 @@ test('Taya driver dashboard materializes today\'s assigned queue without first o
     where: { id: { in: ['seed_queue_legazpi_1', 'seed_queue_legazpi_2'] } }, orderBy: { id: 'asc' },
   });
   const overview = await getDriverOverview('seed_user_driver_noel');
-  assert.ok(overview.queue);
+  assert.equal(overview.queue, null);
   assert.ok(overview.assignment);
-  assert.equal(overview.queue.id === 'seed_queue_legazpi_2', false);
-  const dispatcherRow = (await getDispatcherQueue(RouteCode.LEGAZPI)).entries.find((entry) => entry.id === overview.queue!.id);
+  assert.equal(overview.todayQueueStatus.queuePosition, null);
+  await confirmTayaTestArrival();
+  const arrived = await getDriverOverview('seed_user_driver_noel');
+  assert.ok(arrived.queue);
+  assert.notEqual(arrived.queue.id, 'seed_queue_legazpi_2');
+  const dispatcherRow = (await getDispatcherQueue(RouteCode.LEGAZPI)).entries.find((entry) => entry.id === arrived.queue!.id);
   assert.ok(dispatcherRow);
-  assert.equal(overview.todayQueueStatus.queuePosition, dispatcherRow.position);
-  assert.equal(overview.queue.position, dispatcherRow.position);
+  assert.equal(arrived.todayQueueStatus.queuePosition, dispatcherRow.position);
+  assert.equal(arrived.queue.position, dispatcherRow.position);
   assert.deepEqual(await prisma.queueEntry.findMany({
     where: { id: { in: ['seed_queue_legazpi_1', 'seed_queue_legazpi_2'] } }, orderBy: { id: 'asc' },
   }), historyBefore);
@@ -823,6 +888,7 @@ test('Taya driver dashboard API updates its two position fields after arrival, r
     await dashboardMatchesQueue();
     await recordReliableSequence('seed_user_driver_noel', Array.from({ length: TERMINAL_GEOFENCE.requiredSamples }, () => 0.05));
     assert.equal((await dashboardMatchesQueue()).todayQueueStatus.queuePosition, 1);
+    await confirmTayaTestArrival('seed_user_driver_pedro');
     await applyQueueAction('seed_user_dispatcher_legazpi', RouteCode.LEGAZPI, 'seed_queue_legazpi_1', {
       action: 'override', newPosition: 1, reason: 'Show the same current position in both portals.',
     });
@@ -879,6 +945,9 @@ test('4c. a prior-day Taya trip cannot block today\'s saved queue sequence', asy
   assert.equal(daily.queueEntry?.status, QueueStatus.ACCEPTED);
   assert.equal(daily.trip?.status, TripStatus.ASSIGNED);
   assert.equal(daily.trip?.assignments[0]?.status, AssignmentStatus.ACCEPTED);
+  assert.equal(daily.queueEntry?.position, null);
+  assert.equal((await getDispatcherQueue(RouteCode.LEGAZPI)).entries.some((entry) => entry.vanId === 'VAN-005'), false);
+  await confirmTayaTestArrival();
   assert.equal((await getDispatcherQueue(RouteCode.LEGAZPI)).entries.some((entry) => entry.vanId === 'VAN-005'), true);
 });
 
@@ -914,8 +983,8 @@ test('4ca. Taya displays only today\'s queue while preserving yesterday\'s queue
   const queue = await getDispatcherQueue(RouteCode.LEGAZPI);
 
   assert.equal(queue.entries.some((entry) => historicalQueueIds.includes(entry.id)), false);
-  assert.deepEqual(queue.entries.map((entry) => entry.vanId), ['VAN-019', 'VAN-005']);
-  assert.deepEqual(queue.entries.map((entry) => entry.position), [1, 2]);
+  assert.deepEqual(queue.entries.map((entry) => entry.vanId), ['VAN-019']);
+  assert.deepEqual(queue.entries.map((entry) => entry.position), [1]);
   const currentPlans = await prisma.tayaDailySchedule.findMany({
     where: { serviceDate },
     orderBy: { position: 'asc' },
@@ -937,7 +1006,7 @@ test('4ca. Taya displays only today\'s queue while preserving yesterday\'s queue
   assert.equal(await prisma.tayaDailySchedule.count({ where: { serviceDate: yesterdayDate } }), 2);
 });
 
-test('4d. Taya marks only the absent immediate follower late when the preceding van is dispatched', async () => {
+test('4d. Taya excludes an absent assigned follower while present confirmed vans advance', async () => {
   const now = new Date();
   const serviceDate = manilaServiceDay(now).date;
   const jsWeekday = new Date(`${serviceDate}T00:00:00.000Z`).getUTCDay();
@@ -963,6 +1032,7 @@ test('4d. Taya marks only the absent immediate follower late when the preceding 
       status: VehicleStatus.AT_TERMINAL,
       insideTerminalZone: true,
       latestDistanceKm: 0.02,
+      latestArrivalAt: now,
     },
   });
   await prisma.vehicle.update({
@@ -979,7 +1049,7 @@ test('4d. Taya marks only the absent immediate follower late when the preceding 
     vehicleIds: ['seed_vehicle_019', 'seed_vehicle_005', thirdVehicle.id],
   }, now);
   const before = await getDispatcherQueue(RouteCode.LEGAZPI);
-  assert.deepEqual(before.entries.map((entry) => entry.vanId), ['VAN-019', 'VAN-005', 'TAYA-C']);
+  assert.deepEqual(before.entries.map((entry) => entry.vanId), ['VAN-019', 'TAYA-C']);
   assert.equal(before.entries[1]?.isLate, false);
 
   // Taya has no clock-based late trigger: an engine tick alone changes nothing.
@@ -992,36 +1062,25 @@ test('4d. Taya marks only the absent immediate follower late when the preceding 
   });
 
   const after = await getDispatcherQueue(RouteCode.LEGAZPI);
-  assert.deepEqual(after.entries.map((entry) => entry.vanId), ['TAYA-C', 'VAN-005']);
-  assert.deepEqual(after.entries.map((entry) => entry.position), [1, 2]);
+  assert.deepEqual(after.entries.map((entry) => entry.vanId), ['TAYA-C']);
+  assert.deepEqual(after.entries.map((entry) => entry.position), [1]);
   assert.equal(after.entries[0]?.isLate, false);
-  assert.equal(after.entries[1]?.isLate, true);
-  assert.ok(after.entries[1]?.lateAt);
+  assert.equal((await prisma.queueEntry.findUniqueOrThrow({ where: { id: 'seed_queue_legazpi_2' } })).position, null);
 
-  const rotationLog = await prisma.dispatchLog.findFirstOrThrow({
-    where: { targetId: before.entries[1]!.id, action: DispatchAction.MOVED_TO_LAST },
-    orderBy: { timestamp: 'desc' },
-  });
-  assert.equal((rotationLog.metadata as { trigger?: string } | null)?.trigger, 'taya_preceding_vehicle_dispatched');
-  const notification = await prisma.notification.findFirst({
-    where: { userId: 'seed_user_driver_noel', type: 'QUEUE', message: { contains: 'marked Late' } },
-  });
-  assert.ok(notification);
-
-  // The rotation is written back to the daily Taya plan and survives a sync.
+  // An absent assignment stays outside the queue across synchronization.
   await syncTayaDailyQueue(now);
   const persisted = await getDispatcherQueue(RouteCode.LEGAZPI);
-  assert.deepEqual(persisted.entries.map((entry) => entry.vanId), ['TAYA-C', 'VAN-005']);
-  assert.equal(persisted.entries[1]?.isLate, true);
+  assert.deepEqual(persisted.entries.map((entry) => entry.vanId), ['TAYA-C']);
   await prisma.vehicle.update({ where: { id: 'seed_vehicle_005' }, data: { goOnTripEnabled: true, latestLocationObservedAt: null, terminalEntrySampleCount: 0 } });
   await recordReliableSequence('seed_user_driver_noel', Array.from({ length: TERMINAL_GEOFENCE.requiredSamples }, () => 0.05));
   await syncTayaDailyQueue();
   const returned = await getDispatcherQueue(RouteCode.LEGAZPI);
   assert.deepEqual(returned.entries.map((entry) => entry.vanId), ['TAYA-C', 'VAN-005']);
-  assert.equal(returned.entries[1]?.isLate, true);
+  assert.equal(returned.entries[1]?.isLate, false);
 });
 
 test('4e. Taya keeps the immediate follower in place when that driver is inside the terminal geofence', async () => {
+  await confirmTayaTestArrival();
   await prisma.vehicle.update({
     where: { id: 'seed_vehicle_019' },
     data: { status: VehicleStatus.LOADING, insideTerminalZone: true, latestDistanceKm: 0.02 },
@@ -2693,7 +2752,7 @@ test('24. a lower-position Taya exit becomes an exception without advancing the 
   assert.equal(vehicle.status, VehicleStatus.DEPARTURE_REVIEW);
   assert.equal(vehicle.departureReviewRequired, true);
   assert.notEqual(queue.status, QueueStatus.DEPARTED);
-  assert.equal(queue.position, 2);
+  assert.equal(queue.position, null);
   assert.equal(head.position, 1);
   assert.equal(await prisma.dispatchLog.count({ where: { action: DispatchAction.TRIP_DEPARTED } }), 0);
 });
@@ -3807,7 +3866,7 @@ for (const route of [RouteCode.GOA, RouteCode.LEGAZPI]) {
     if (!goa) assert.equal((await prisma.tripAssignment.findUniqueOrThrow({ where: { id: 'seed_assignment_legazpi' } })).status, 'EXPIRED');
     assert.equal((await prisma.vehicle.findUniqueOrThrow({ where: { id: vehicleId } })).goOnTripEnabled, true);
     const remaining = await prisma.queueEntry.findFirst({ where: { route, status: { notIn: [QueueStatus.DEPARTED, QueueStatus.REJECTED, QueueStatus.REPLACED] } } });
-    assert.equal(remaining?.position, 1);
+    assert.equal(remaining?.position, goa ? 1 : null);
     const duplicate = await recordDriverLocation(driverId, latitudeAtDistanceKm(0.18), NCEBT.longitude, new Date(now.getTime() + 30_000), 10, 2);
     assert.equal(duplicate.transition, 'none');
     await recordDriverLocation(driverId, latitudeAtDistanceKm(6), NCEBT.longitude, new Date(now.getTime() + 40_000), 10, 2);
@@ -3879,6 +3938,7 @@ test('46b. a TAYA van promoted past an absent follower automatically departs as 
       goOnTripEnabled: true,
       insideTerminalZone: true,
       latestDistanceKm: 0.02,
+      latestArrivalAt: now,
     },
   });
   await prisma.vehicle.update({
@@ -3902,8 +3962,7 @@ test('46b. a TAYA van promoted past an absent follower automatically departs as 
   const promoted = await getDispatcherQueue(RouteCode.LEGAZPI);
   assert.equal(promoted.entries[0]?.vanId, 'TAYA-PROMOTED');
   assert.equal(promoted.entries[0]?.position, 1);
-  assert.equal(promoted.entries[1]?.vanId, 'VAN-005');
-  assert.equal(promoted.entries[1]?.isLate, true);
+  assert.equal(promoted.entries.some((entry) => entry.vanId === 'VAN-005'), false);
 
   await prisma.vehicle.update({
     where: { id: promotedVehicle.id },

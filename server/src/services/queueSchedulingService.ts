@@ -5,6 +5,7 @@ import { passengerCapacityOf } from '../config/vehicle.js';
 import { prisma } from '../lib/prisma.js';
 import { AppError } from '../utils/AppError.js';
 import { manilaServiceDay } from './driverSchedulePolicy.js';
+import { tayaQueueAdmissionWhere } from './tayaQueueEligibility.js';
 
 export const operationalQueueStatuses = [QueueStatus.WAITING, QueueStatus.ASSIGNED, QueueStatus.ACCEPTED, QueueStatus.READY_FOR_DISPATCH, QueueStatus.DELAYED];
 export const queueOrder: Prisma.QueueEntryOrderByWithRelationInput[] = [{ position: 'asc' }, { arrivalTimestamp: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }];
@@ -27,16 +28,31 @@ export async function withRouteQueue<T>(route: RouteCode, work: (tx: Prisma.Tran
   }
 }
 
-export async function normalizeSavedQueue(tx: Prisma.TransactionClient, route: RouteCode) {
-  const today = manilaServiceDay(new Date());
-  const tayaServiceDate = new Date(`${today.date}T00:00:00.000Z`);
+export async function normalizeSavedQueue(tx: Prisma.TransactionClient, route: RouteCode, now = new Date()) {
+  if (route === RouteCode.LEGAZPI) {
+    const day = manilaServiceDay(now);
+    await tx.queueEntry.updateMany({
+      where: {
+        route, status: { in: operationalQueueStatuses },
+        tayaDailySchedule: { is: { serviceDate: new Date(`${day.date}T00:00:00.000Z`) } },
+        OR: [
+          { tayaArrivalAt: null },
+          { tayaArrivalAt: { lt: day.start } },
+          { tayaArrivalAt: { gte: day.end } },
+          { vehicle: { insideTerminalZone: false } },
+          { vehicle: { status: { in: [VehicleStatus.ON_TRIP, VehicleStatus.UNAVAILABLE] } } },
+        ],
+      },
+      data: { position: null, tayaArrivalAt: null },
+    });
+  }
   const rows = await tx.queueEntry.findMany({
     where: {
       route,
       status: { in: operationalQueueStatuses },
       vehicle: { status: { notIn: [VehicleStatus.ON_TRIP, VehicleStatus.UNAVAILABLE] } },
       ...(route === RouteCode.LEGAZPI
-        ? { tayaDailySchedule: { is: { serviceDate: tayaServiceDate } } }
+        ? tayaQueueAdmissionWhere(now)
         : {}),
     },
     orderBy: queueOrder,
@@ -65,7 +81,7 @@ export async function normalizeSavedQueue(tx: Prisma.TransactionClient, route: R
           if (leftLoading !== undefined && rightLoading === undefined) return -1;
           if (leftLoading === undefined && rightLoading !== undefined) return 1;
         }
-        return left.position - right.position
+        return (left.position ?? 0) - (right.position ?? 0)
           || left.arrivalTimestamp.getTime() - right.arrivalTimestamp.getTime()
           || left.createdAt.getTime() - right.createdAt.getTime()
           || left.id.localeCompare(right.id);
@@ -681,7 +697,7 @@ export async function reorderDispatcherQueue(actorUserId: string, route: RouteCo
         status: { in: operationalQueueStatuses },
         vehicle: { status: { notIn: [VehicleStatus.ON_TRIP, VehicleStatus.UNAVAILABLE] } },
         ...(route === RouteCode.LEGAZPI
-          ? { tayaDailySchedule: { is: { serviceDate: new Date(`${manilaServiceDay(now).date}T00:00:00.000Z`) } } }
+          ? tayaQueueAdmissionWhere(now)
           : {}),
       },
     });
@@ -692,12 +708,11 @@ export async function reorderDispatcherQueue(actorUserId: string, route: RouteCo
       where: {
         route,
         status: { in: operationalQueueStatuses },
-        vehicle: { status: { notIn: [VehicleStatus.ON_TRIP, VehicleStatus.UNAVAILABLE] } },
         ...(route === RouteCode.GOA && targetEntry.scheduledLoadingTime
-          ? { scheduledLoadingTime: { gte: day.start, lt: day.end } }
+          ? { vehicle: { status: { notIn: [VehicleStatus.ON_TRIP, VehicleStatus.UNAVAILABLE] } }, scheduledLoadingTime: { gte: day.start, lt: day.end } }
           : route === RouteCode.LEGAZPI
-            ? { tayaDailySchedule: { is: { serviceDate: new Date(`${day.date}T00:00:00.000Z`) } } }
-            : {}),
+            ? tayaQueueAdmissionWhere(now)
+            : { vehicle: { status: { notIn: [VehicleStatus.ON_TRIP, VehicleStatus.UNAVAILABLE] } } }),
       },
       orderBy: queueOrder,
     });

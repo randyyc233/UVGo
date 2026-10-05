@@ -21,6 +21,7 @@ import { manilaServiceDay } from './driverSchedulePolicy.js';
 import { admitAcceptedGosoSchedulesForDay, evaluateGosoLoading, isConfirmedForScheduledLoading, isPresentForLoading, normalizeSavedQueue, queueOrder, withRouteQueue } from './queueSchedulingService.js';
 import { selectTripForQueueRow } from './queueTripSelection.js';
 import { sequenceTayaArrivalInTransaction, syncTayaDailyQueue } from './tayaQueueService.js';
+import { tayaQueueAdmissionWhere } from './tayaQueueEligibility.js';
 
 const activeQueueStatuses: QueueStatus[] = [
   QueueStatus.WAITING,
@@ -108,22 +109,23 @@ async function rotateAbsentTayaFollowerAfterDeparture(
     where: {
       route: RouteCode.LEGAZPI,
       status: { in: activeQueueStatuses },
+      position: { not: null },
       vehicle: { status: { notIn: [VehicleStatus.ON_TRIP, VehicleStatus.UNAVAILABLE] } },
       tayaDailySchedule: { is: { serviceDate } },
     },
     orderBy: queueOrder,
     include: { vehicle: true },
   });
-  const follower = activeRows.find((row) => row.position > departedPosition);
+  const follower = activeRows.find((row) => row.position !== null && row.position > departedPosition);
   if (!follower || follower.lateAt || isConfirmedForScheduledLoading(follower.vehicle)) return null;
 
   const rowsWithoutFollower = activeRows.filter((row) => row.id !== follower.id);
   const nextPresent = rowsWithoutFollower.find((row) => (
-    row.position > follower.position && isConfirmedForScheduledLoading(row.vehicle)
+    (row.position ?? 0) > (follower.position ?? 0) && isConfirmedForScheduledLoading(row.vehicle)
   ));
   if (nextPresent) {
     rowsWithoutFollower.splice(rowsWithoutFollower.findIndex((row) => row.id === nextPresent.id), 1);
-    const departedGap = rowsWithoutFollower.filter((row) => row.position < departedPosition).length;
+    const departedGap = rowsWithoutFollower.filter((row) => row.position !== null && row.position < departedPosition).length;
     rowsWithoutFollower.splice(departedGap, 0, nextPresent);
   }
   const reordered = [...rowsWithoutFollower, follower];
@@ -323,10 +325,9 @@ function activeDepartureQueueWhere(route: RouteCode, observedAt: Date): Prisma.Q
   return {
     route,
     status: { in: activeQueueStatuses },
-    vehicle: { status: { notIn: [VehicleStatus.ON_TRIP, VehicleStatus.UNAVAILABLE] } },
     ...(route === RouteCode.GOA
-      ? { scheduledLoadingTime: { gte: serviceDay.start, lt: serviceDay.end } }
-      : { tayaDailySchedule: { is: { serviceDate: new Date(`${serviceDay.date}T00:00:00.000Z`) } } }),
+      ? { vehicle: { status: { notIn: [VehicleStatus.ON_TRIP, VehicleStatus.UNAVAILABLE] } }, scheduledLoadingTime: { gte: serviceDay.start, lt: serviceDay.end } }
+      : tayaQueueAdmissionWhere(observedAt)),
   };
 }
 
@@ -374,6 +375,10 @@ async function completeQueueDeparture(actorUserId: string, route: RouteCode, req
     if (entry.route !== route) throw new AppError(403, 'ROUTE_ACCESS_DENIED', 'This queue entry belongs to another route.');
     if (!activeQueueStatuses.includes(entry.status) || entry.vehicle.status === VehicleStatus.ON_TRIP) {
       throw new AppError(409, 'QUEUE_ENTRY_NOT_ACTIVE', 'This van is no longer available for dispatch. Refresh the queue.');
+    }
+    if (route === RouteCode.LEGAZPI && (!entry.tayaArrivalAt || entry.position === null || !entry.vehicle.insideTerminalZone)) {
+      if (request.method === 'gps') return null;
+      throw new AppError(409, 'QUEUE_ENTRY_NOT_ACTIVE', 'Confirm terminal arrival before dispatching this Taya van.');
     }
     if (request.method === 'gps' && (!entry.vehicle.insideTerminalZone || entry.vehicleId !== request.vehicleId)) {
       return null;
@@ -802,6 +807,7 @@ export async function recordDriverLocation(
     }),
   ]);
 
+  if (vehicle.route === RouteCode.LEGAZPI) await syncTayaDailyQueue(observedAt);
   return { transition: 'departure_review_required', insideActiveZone, insideTerminalZone: false, distanceKm, trackingActive: true };
 }
 
@@ -1014,13 +1020,12 @@ async function evaluateGoso(actorUserId: string, now: Date) {
 
 export async function recalculateTayaReadiness(now = new Date()) {
   const serviceDay = manilaServiceDay(now);
-  const serviceDate = new Date(`${serviceDay.date}T00:00:00.000Z`);
   return withRouteQueue(RouteCode.LEGAZPI, async (transaction) => {
   const queue = await transaction.queueEntry.findMany({
     where: {
       route: RouteCode.LEGAZPI,
       status: { in: [QueueStatus.WAITING, QueueStatus.ASSIGNED, QueueStatus.ACCEPTED, QueueStatus.READY_FOR_DISPATCH] },
-      tayaDailySchedule: { is: { serviceDate } },
+      ...tayaQueueAdmissionWhere(now),
     },
     orderBy: queueOrder,
     include: {
@@ -1173,6 +1178,7 @@ export async function cancelDriverScheduledAssignment(driverId: string, assignme
       where: {
         route: assignment.trip.route,
         status: { in: [QueueStatus.WAITING, QueueStatus.READY_FOR_DISPATCH] },
+        ...(assignment.trip.route === RouteCode.LEGAZPI ? { AND: [tayaQueueAdmissionWhere(now)] } : {}),
         ...(assignment.queueEntryId ? { id: { not: assignment.queueEntryId } } : {}),
         vehicleId: { not: assignment.trip.vehicleId },
         vehicle: {
@@ -1386,6 +1392,7 @@ export async function reallocateUnavailableVehicle(actorUserId: string, sourceVe
       where: {
         route: sourceVehicle.route,
         status: { in: [QueueStatus.WAITING, QueueStatus.READY_FOR_DISPATCH] },
+        ...(sourceVehicle.route === RouteCode.LEGAZPI ? { AND: [tayaQueueAdmissionWhere()] } : {}),
         vehicleId: { not: sourceVehicle.id },
         vehicle: { assignedDriverId: { not: null }, status: { notIn: [VehicleStatus.UNAVAILABLE, VehicleStatus.DELAYED, VehicleStatus.ON_TRIP] } },
       },

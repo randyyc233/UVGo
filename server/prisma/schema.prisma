@@ -257,10 +257,11 @@ model QueueEntry {
   id                   String             @id @default(cuid())
   vehicleId            String
   route                RouteCode
-  position             Int
+  /// Null means an assigned Taya van has not been admitted to the active queue.
+  position             Int?
   arrivalTimestamp     DateTime
-  /// First confirmed terminal arrival for this Taya daily occurrence. Null
-  /// means the driver is assigned for the day but has not arrived yet.
+  /// Confirmed terminal arrival for the current Taya queue admission. Null
+  /// means the assigned driver is not currently admitted to the terminal queue.
   tayaArrivalAt        DateTime?
   /// GOSO queue priority. Scheduled drivers sort by this value, regardless of
   /// terminal arrival time, until their own loading deadline is missed.

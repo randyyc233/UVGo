@@ -14,6 +14,7 @@ import { manilaServiceDay } from './driverSchedulePolicy.js';
 import { admitAcceptedGosoSchedulesForDay, operationalQueueStatuses } from './queueSchedulingService.js';
 import { selectTripForQueueRow } from './queueTripSelection.js';
 import { syncTayaDailyQueue } from './tayaQueueService.js';
+import { tayaQueueAdmissionWhere } from './tayaQueueEligibility.js';
 
 const activeTripStatuses = [TripStatus.SCHEDULED, TripStatus.ASSIGNING, TripStatus.ASSIGNED, TripStatus.BOARDING, TripStatus.READY, TripStatus.DELAYED];
 
@@ -35,14 +36,13 @@ const destinationNames: Record<RouteCode, string> = {
 export async function getPublicDepartures() {
   await Promise.all([admitAcceptedGosoSchedulesForDay(), syncTayaDailyQueue()]);
   const today = manilaServiceDay(new Date());
-  const tayaServiceDate = new Date(`${today.date}T00:00:00.000Z`);
   const entries = await prisma.queueEntry.findMany({
     where: {
       status: { in: operationalQueueStatuses },
       vehicle: { status: { notIn: [VehicleStatus.ON_TRIP, VehicleStatus.UNAVAILABLE] } },
       OR: [
         { route: RouteCode.GOA, scheduledLoadingTime: { gte: today.start, lt: today.end } },
-        { route: RouteCode.LEGAZPI, tayaDailySchedule: { is: { serviceDate: tayaServiceDate } } },
+        { route: RouteCode.LEGAZPI, ...tayaQueueAdmissionWhere() },
       ],
     },
     orderBy: [{ route: 'asc' }, { position: 'asc' }],
