@@ -53,6 +53,44 @@ function DriverError({ message, retry }: { message: string; retry: () => void })
   return <EmptyState icon={<AlertTriangle className="h-6 w-6" />} title="Driver data unavailable" description={message} action={<Button variant="outline" onClick={retry} leadingIcon={<RefreshCw className="h-4 w-4" />}>Try again</Button>} />;
 }
 
+function DepartureReviewWarning({ storageKey, reason, className }: { storageKey: string; reason: string | null; className?: string }) {
+  const [dismissed, setDismissed] = useState(() => {
+    try {
+      return window.sessionStorage.getItem(storageKey) === 'dismissed';
+    } catch {
+      return false;
+    }
+  });
+
+  function dismiss() {
+    setDismissed(true);
+    try {
+      window.sessionStorage.setItem(storageKey, 'dismissed');
+    } catch {
+      // The close button still works when browser storage is unavailable.
+    }
+  }
+
+  if (dismissed) return null;
+
+  return (
+    <Card role="alert" className={cn('flex items-start gap-3 border-danger/30 bg-danger-soft p-4', className)}>
+      <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-danger" />
+      <div className="min-w-0 flex-1">
+        <p className="font-extrabold text-danger">Dispatcher review required</p>
+        <p className="mt-1 text-sm text-text-secondary">{reason ?? 'The location transition could not safely confirm departure.'}</p>
+      </div>
+      <button type="button" aria-label="Dismiss dispatcher review warning" title="Dismiss warning" onClick={dismiss} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-control text-danger transition-colors hover:bg-danger/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-danger">
+        <X className="h-5 w-5" aria-hidden="true" />
+      </button>
+    </Card>
+  );
+}
+
+function departureReviewStorageKey(overview: DriverOverview) {
+  return `uvgo:departure-review:${JSON.stringify([overview.vehicle.id, overview.trip?.id, overview.queue?.id, overview.departureConfirmation.reviewReason])}`;
+}
+
 export function DriverSetupPage() {
   const { overview, loading, error, refresh, mutate } = useDriverOverview();
   const navigate = useNavigate();
@@ -112,7 +150,7 @@ export function DriverDashboardPage() {
   return (
     <div className="space-y-4">
       {overview.departureConfirmation.authorized ? <Card className="flex items-start gap-3 border-warning/30 bg-warning-soft p-4"><Navigation className="mt-0.5 h-5 w-5 shrink-0 text-warning" /><div><p className="font-extrabold">Departure authorized</p><p className="mt-1 text-sm text-text-secondary">Keep GPS active while leaving through the terminal exit. Confirmation progress: {overview.departureConfirmation.terminalExitSamples}/{overview.departureConfirmation.requiredSamples} reliable outward samples.</p></div></Card> : null}
-      {overview.departureConfirmation.reviewRequired ? <Card className="flex items-start gap-3 border-danger/30 bg-danger-soft p-4"><AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-danger" /><div><p className="font-extrabold text-danger">Dispatcher review required</p><p className="mt-1 text-sm text-text-secondary">{overview.departureConfirmation.reviewReason ?? 'The location transition could not safely confirm departure.'}</p></div></Card> : null}
+      {overview.departureConfirmation.reviewRequired ? <DepartureReviewWarning key={departureReviewStorageKey(overview)} storageKey={departureReviewStorageKey(overview)} reason={overview.departureConfirmation.reviewReason} /> : null}
       {error ? <p role="alert" className="rounded-control bg-danger-soft p-3 text-sm text-danger">{error}</p> : null}
       <Card className="p-5 sm:p-6">
         <div className="flex flex-wrap items-start justify-between gap-3"><div><p className="text-xs font-bold uppercase tracking-[0.12em] text-primary">Today's Queue Status</p><h2 className="mt-1 text-xl font-black">{overview.todayQueueStatus.policy} policy</h2></div><StatusBadge tone={tone(overview.todayQueueStatus.status)}>{formatStatus(overview.todayQueueStatus.status)}</StatusBadge></div>
@@ -319,7 +357,7 @@ export function DriverTripPage() {
   const arrived = overview.vehicle.insideTerminalZone;
   return (
     <div className="grid gap-4 lg:grid-cols-[1fr_0.9fr]">
-      {overview.departureConfirmation.reviewRequired ? <p role="alert" className="rounded-control bg-danger-soft p-3 text-sm leading-5 text-danger lg:col-span-2">{overview.departureConfirmation.reviewReason}</p> : null}
+      {overview.departureConfirmation.reviewRequired ? <DepartureReviewWarning key={departureReviewStorageKey(overview)} storageKey={departureReviewStorageKey(overview)} reason={overview.departureConfirmation.reviewReason} className="lg:col-span-2" /> : null}
       <Card className="overflow-hidden">
         <div className="bg-gradient-to-br from-primary-soft to-white p-5 sm:p-6">
           <div className="flex items-start justify-between gap-3"><div><p className="text-xs font-bold uppercase tracking-[0.12em] text-primary">Operational zones</p><h2 className="mt-1 text-2xl font-black">NCEBT geofence</h2><p className="mt-2 text-sm text-text-secondary">5 km incoming zone and a shared terminal circle for arrival, loading attendance and exit confirmation.</p></div><span className={cn('rounded-pill px-3 py-1 text-xs font-bold', overview.vehicle.insideActiveZone ? 'bg-success text-white' : 'bg-cream text-text-secondary')}>{overview.vehicle.insideActiveZone ? 'ACTIVE' : 'OUTSIDE'}</span></div>
